@@ -9,7 +9,6 @@
     "launcher/artifacts*",
     "dist"
   ],
-  "publicationRepositoryCommit": "9b72a61",
   "verificationScripts": [
     "scripts/verify.ps1",
     "scripts/apply.ps1"
