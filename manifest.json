@@ -1,0 +1,9 @@
+{
+  "upstream": "https://github.com/miuuyy/codex-chatgpt-web",
+  "baseRelease": "v5.0.8",
+  "baseCommit": "00aab23eb78a0d35ab575ff14044e29c0f80e711",
+  "patch": "codex-chatgpt-web-custom-v5.0.8.patch",
+  "generatedFromWorktreeHead": "65ffa80a0f37568f29c0d838e598c1df9468a5bf",
+  "generatedAt": "2026-09-17",
+  "generatedArtifactsExcluded": ["launcher/artifacts*", "dist"]
+}
