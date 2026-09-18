@@ -5,5 +5,13 @@
   "patch": "codex-chatgpt-web-custom-v5.0.8.patch",
   "generatedFromWorktreeHead": "65ffa80a0f37568f29c0d838e598c1df9468a5bf",
   "generatedAt": "2026-09-17",
-  "generatedArtifactsExcluded": ["launcher/artifacts*", "dist"]
+  "generatedArtifactsExcluded": [
+    "launcher/artifacts*",
+    "dist"
+  ],
+  "publicationRepositoryCommit": "9b72a61",
+  "verificationScripts": [
+    "scripts/verify.ps1",
+    "scripts/apply.ps1"
+  ]
 }
