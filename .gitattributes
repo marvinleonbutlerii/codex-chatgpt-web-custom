@@ -1,2 +1,3 @@
 # Preserve the Git patch byte-for-byte so its checksum and binary hunks remain stable.
+* text=auto eol=lf
 *.patch -text

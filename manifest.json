@@ -1,10 +1,16 @@
 {
   "upstream": "https://github.com/miuuyy/codex-chatgpt-web",
-  "baseRelease": "v5.0.8",
-  "baseCommit": "00aab23eb78a0d35ab575ff14044e29c0f80e711",
+  "upstreamVersion": "5.0.8",
+  "baseRef": "main",
+  "baseCommit": "eaf4f09ae92d4dc4429fa597b0861663138f08f8",
+  "release": "v5.0.8-custom.1",
+  "distribution": "custom-integrations-source-patch",
   "patch": "codex-chatgpt-web-custom-v5.0.8.patch",
-  "generatedFromWorktreeHead": "65ffa80a0f37568f29c0d838e598c1df9468a5bf",
-  "generatedAt": "2026-09-17",
+  "patchSha256": "ad7a0e91f3a3acbcba01669661622b2f85426e83ccb963dbf742a2a76111ab93",
+  "generatedFromWorktreeHead": "8880ef46404571bfc32e5537358d1c08952c25e6",
+  "sourceTree": "44f90116b0385c031c7ec1eb2f7ee7c4a6230587",
+  "generatedAt": "2026-09-22",
+  "requiredBunVersion": "1.4.2",
   "generatedArtifactsExcluded": [
     "launcher/artifacts*",
     "dist"
@@ -12,5 +18,10 @@
   "verificationScripts": [
     "scripts/verify.ps1",
     "scripts/apply.ps1"
-  ]
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "focusedTestsPassed": 17,
+    "liveApplicationValidation": false
+  }
 }

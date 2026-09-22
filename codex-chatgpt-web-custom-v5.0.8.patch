@@ -20,7 +20,7 @@ index 11f2c2c483cf4e8fb1a6a2efe275459c5e05b260..9aaff9f743c6e13c01a08f1f18bbcfb5
          if: runner.os == 'Linux'
          run: |
 diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
-index 46f260d5a2291bd3983eda822600d21cf17d6e1e..7b48a29d494907ebf37e674f04b2bbcde29e9282 100644
+index 46f260d5a2291bd3983eda822600d21cf17d6e1e..498d7a530b5633b59313512625bda1090bea952f 100644
 --- a/.github/workflows/release.yml
 +++ b/.github/workflows/release.yml
 @@ -26,14 +26,14 @@ jobs:
@@ -58,6 +58,137 @@ index 46f260d5a2291bd3983eda822600d21cf17d6e1e..7b48a29d494907ebf37e674f04b2bbcd
            cp LICENSES/libnotify-0.8.7-LGPL-2.1.md release-assets/libnotify-0.8.7-LGPL-2.1.md
            cp dist/THIRD_PARTY_NOTICES.txt release-assets/THIRD_PARTY_NOTICES.txt
            cp scripts/install.sh release-assets/install.sh
+@@ -161,13 +161,41 @@ jobs:
+             release_flags=(--prerelease --latest=false)
+           fi
+           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+-            gh release upload "$GITHUB_REF_NAME" "${release_files[@]}" \
++            declare -A remote_digests=()
++            while IFS=$'\t' read -r name digest; do
++              remote_digests["$name"]="$digest"
++            done < <(gh release view "$GITHUB_REF_NAME" \
+               --repo "$GITHUB_REPOSITORY" \
+-              --clobber
+-            gh release edit "$GITHUB_REF_NAME" \
+-              --repo "$GITHUB_REPOSITORY" \
+-              --draft=false \
+-              "${release_flags[@]}"
++              --json assets \
++              --jq '.assets[] | [.name, .digest] | @tsv')
++
++            missing_files=()
++            for file in "${release_files[@]}"; do
++              name="$(basename "$file")"
++              local_digest="sha256:$(sha256sum "$file" | awk '{ print $1 }')"
++              remote_digest="${remote_digests[$name]-}"
++              if [ -z "${remote_digests[$name]+present}" ]; then
++                missing_files+=("$file")
++              elif [[ "$remote_digest" != sha256:* || -z "${remote_digest#sha256:}" ]]; then
++                echo "Existing release asset has no SHA-256 digest: $name" >&2
++                exit 1
++              elif [ "$remote_digest" != "$local_digest" ]; then
++                echo "Existing release asset differs from this build: $name" >&2
++                exit 1
++              fi
++            done
++
++            for name in "${!remote_digests[@]}"; do
++              if [ ! -f "release-assets/$name" ]; then
++                echo "Existing release contains an unexpected asset: $name" >&2
++                exit 1
++              fi
++            done
++
++            if [ "${#missing_files[@]}" -gt 0 ]; then
++              gh release upload "$GITHUB_REF_NAME" "${missing_files[@]}" \
++                --repo "$GITHUB_REPOSITORY"
++            fi
+           else
+             gh release create "$GITHUB_REF_NAME" "${release_files[@]}" \
+               --repo "$GITHUB_REPOSITORY" \
+@@ -176,40 +204,42 @@ jobs:
+               --generate-notes
+           fi
+ 
+-          published_manifest="$(mktemp)"
+-          gh release view "$GITHUB_REF_NAME" \
+-            --repo "$GITHUB_REPOSITORY" \
+-            --json assets \
+-            --jq '.assets[] | select(.name != "checksums.txt") | [.name, .digest] | @tsv' \
+-            | while IFS=$'\t' read -r name digest; do
+-                if [[ "$digest" != sha256:* || -z "${digest#sha256:}" ]]; then
+-                  echo "Published asset has no SHA-256 digest: $name" >&2
+-                  exit 1
+-                fi
+-                printf '%s  %s\n' "${digest#sha256:}" "$name"
+-              done \
+-            | LC_ALL=C sort -k2 > "$published_manifest"
+-          test -s "$published_manifest"
+-          mv "$published_manifest" release-assets/checksums.txt
+-          gh release upload "$GITHUB_REF_NAME" release-assets/checksums.txt \
+-            --repo "$GITHUB_REPOSITORY" \
+-            --clobber
+-
++          remote_count=0
+           while IFS=$'\t' read -r name digest; do
+-            if [ "$name" = checksums.txt ]; then continue; fi
+-            expected="$(awk -v asset="$name" '$2 == asset { print $1 }' release-assets/checksums.txt)"
+-            if [ -z "$expected" ] || [ "sha256:$expected" != "$digest" ]; then
++            remote_count=$((remote_count + 1))
++            local_file="release-assets/$name"
++            if [ ! -f "$local_file" ]; then
++              echo "Published release contains an unexpected asset: $name" >&2
++              exit 1
++            fi
++            if [[ "$digest" != sha256:* || -z "${digest#sha256:}" ]]; then
++              echo "Published asset has no SHA-256 digest: $name" >&2
++              exit 1
++            fi
++            local_digest="sha256:$(sha256sum "$local_file" | awk '{ print $1 }')"
++            if [ "$local_digest" != "$digest" ]; then
+               echo "Published asset checksum mismatch: $name" >&2
+               exit 1
+             fi
++            if [ "$name" != checksums.txt ]; then
++              expected="$(awk -v asset="$name" '$2 == asset { print $1 }' release-assets/checksums.txt)"
++              if [ -z "$expected" ] || [ "sha256:$expected" != "$digest" ]; then
++                echo "Published asset is not bound by checksums.txt: $name" >&2
++                exit 1
++              fi
++            fi
+           done < <(gh release view "$GITHUB_REF_NAME" \
+             --repo "$GITHUB_REPOSITORY" \
+             --json assets \
+             --jq '.assets[] | [.name, .digest] | @tsv')
+ 
+-          local_manifest_digest="$(sha256sum release-assets/checksums.txt | awk '{ print $1 }')"
+-          remote_manifest_digest="$(gh release view "$GITHUB_REF_NAME" \
++          local_count="${#release_files[@]}"
++          if [ "$remote_count" -ne "$local_count" ]; then
++            echo "Published release asset count mismatch: expected $local_count, received $remote_count" >&2
++            exit 1
++          fi
++
++          gh release edit "$GITHUB_REF_NAME" \
+             --repo "$GITHUB_REPOSITORY" \
+-            --json assets \
+-            --jq '.assets[] | select(.name == "checksums.txt") | .digest')"
+-          test "sha256:$local_manifest_digest" = "$remote_manifest_digest"
++            --draft=false \
++            "${release_flags[@]}"
+diff --git a/.gitignore b/.gitignore
+index 72a328b5ff761382c753e2a3dba024a4bfc747af..d884c004ed97460e86205268ead085767751b0c4 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -13,7 +13,7 @@ runtime/
+ .launcher-runtime/
+ launcher/build/
+ launcher/release/
+-launcher/artifacts/
++launcher/artifacts*/
+ .playwright-cli/
+ output/
+ notes.md
 diff --git a/LICENSES/Bun-1.4.2.md b/LICENSES/Bun-1.4.2.md
 new file mode 100644
 index 0000000000000000000000000000000000000000..3ae7d08305e14ab003a235359065132941fce3e7
@@ -283,7 +414,7 @@ index 010bf4800fb091690cf2a98526924dfd5e72bda8..5ffe42c8bd373eae41afbe0584d9a9ee
      "bytes": ["bytes@3.1.2", "", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
  
 diff --git a/docs/architecture.md b/docs/architecture.md
-index 58f39ad9c2a97ab3d9b8c297597df59019412582..75e8a95c5d9cf74c4eed2d21fc689800bd14f60d 100644
+index 3c00e772af991ba491d5888bad25802a509d3d23..3f086a0a9ad70f989ac808403a1d940641bc41c5 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -105,10 +105,16 @@ server-authenticated session and the Temporary Chat composer in the primary owne
@@ -307,7 +438,7 @@ index 58f39ad9c2a97ab3d9b8c297597df59019412582..75e8a95c5d9cf74c4eed2d21fc689800
  
  Initial Launcher setup asks which interaction mode to install and defaults to With Automation. The
  same choice remains available in Settings; changing it uses the transactional setup path, replaces
-@@ -133,22 +139,32 @@ Top-level `model_context_window` raises only the proxied native rows' advertised
+@@ -133,24 +139,33 @@ Top-level `model_context_window` raises only the proxied native rows' advertised
  Codex to apply its own configured context override without clamping. Routed ChatGPT Web models
  retain their measured adapter-owned limits.
  
@@ -315,7 +446,9 @@ index 58f39ad9c2a97ab3d9b8c297597df59019412582..75e8a95c5d9cf74c4eed2d21fc689800
 -composer budgets. Inert stages carry text; the final message also carries all retained attachments,
 -the execution contract and any output schema. Their reserves are deducted before partitioning,
 -then preflight checks the actual compiled messages and total transaction. The selected execution
--effort, attachment references and three-part maximum remain unchanged.
+-effort and attachment references remain unchanged. Large transactions use up to six messages;
+-the advertised context and compaction thresholds remain three times the base limits. More parts
+-reduce message size, not the amount of history retained.
 +Bigger Context partitions ordered semantic records against each message's available token and
 +composer budgets. A record that is itself larger than one browser message is serialized and split
 +into ordered transport fragments; the final commit requires those fragments to be concatenated and
@@ -323,10 +456,11 @@ index 58f39ad9c2a97ab3d9b8c297597df59019412582..75e8a95c5d9cf74c4eed2d21fc689800
 +text; the final message also carries all retained attachments, the execution contract and any output
 +schema. Their reserves are deducted before partitioning, then preflight checks the actual compiled
 +messages and total transaction. During compaction, aggregate overflow additionally removes only the
-+oldest expendable history until the three-part transaction fits, preserving the newest cumulative
++oldest expendable history until the six-part transaction fits, preserving the newest cumulative
 +checkpoint and the final compaction instruction and explicitly marking the supplied history as
-+incomplete. The selected execution effort, attachment references and three-part maximum remain
-+unchanged.
++incomplete. The selected execution effort and attachment references remain unchanged. Large
++transactions use up to six messages; the advertised context and compaction thresholds remain three
++times the base limits. More parts reduce message size, not the amount of history retained.
  
 -In Full mode, routed compaction v1/v2 uses the exact retained source agent and a one-shot MCP control
 -capability that accepts only the bound checkpoint; it cannot claim or invoke the ordinary Codex tool
@@ -356,7 +490,7 @@ index 58f39ad9c2a97ab3d9b8c297597df59019412582..75e8a95c5d9cf74c4eed2d21fc689800
  by Codex. A prompt-level checkpoint marker is translated into a visible Codex trace item;
  every later tool action in the same turn continues to present the current turn capability. Visible
 diff --git a/docs/dev-chat.md b/docs/dev-chat.md
-index 6a372af071493f5c1b989abb80972fa4b0bd31e3..724b5c4cb24499e930fcbcb2e6740b406983765d 100644
+index ca180f4d412ccc52d322fe86d2b86c2c0051e99e..4d69d9976bedcaff22761752964da2643ee83a7f 100644
 --- a/docs/dev-chat.md
 +++ b/docs/dev-chat.md
 @@ -52,9 +52,9 @@ directly rather than through deferred tool search so the test can prove the requ
@@ -392,7 +526,7 @@ index 6a372af071493f5c1b989abb80972fa4b0bd31e3..724b5c4cb24499e930fcbcb2e6740b40
 +Temporary Chat. If the retained private chat was already closed, or another retained browser/UI
 +failure prevents checkpoint generation, the bridge retires that epoch and starts one read-only
 +fallback chat from canonical Codex history instead. Browser-only mode
- has no retained MCP boundary and keeps the three-message compaction path so its summarizer receives
+ has no retained MCP boundary and uses the six-message compaction path so its summarizer receives
  the complete expanded history.
  
  Any missing or malformed acknowledgement fails the whole transaction. No later part or final
@@ -401,15 +535,15 @@ index 6a372af071493f5c1b989abb80972fa4b0bd31e3..724b5c4cb24499e930fcbcb2e6740b40
 -stage must still fit the selected ChatGPT mode's measured one-message boundary.
 +stage must still fit the selected ChatGPT mode's measured one-message boundary. Oversized individual
 +Codex records are therefore fragmented only at the JSON transport layer and reconstructed before the
-+model applies their original role. If a three-part compaction transaction still exceeds aggregate
++model applies their original role. If a six-part compaction transaction still exceeds aggregate
 +capacity, the bridge repeatedly drops the oldest expendable history while preserving the newest
 +cumulative checkpoint and final compaction instruction; the commit explicitly tells the summarizer
-+that older history was omitted. A remaining checkpoint/final instruction that cannot fit all three
++that older history was omitted. A remaining checkpoint/final instruction that cannot fit all six
 +parts fails closed instead of opening a browser turn.
  
- Small turns add no requests. Two-part turns add two staging requests and acknowledgements; three-part
- turns add three. Browser-only compaction also uses three stages. Large turns are therefore slower and may increase the probability of
-@@ -188,3 +194,20 @@ The DEV driver:
+ Small turns use one request. Two-part turns use one inert staging request and one final request;
+ six-part turns use five staging requests and one final request. Browser-only compaction also uses
+@@ -190,3 +196,20 @@ The DEV driver:
  
  The simulator has no keyword-to-result table and never claims that a command, patch, image read,
  user interaction, or external mutation actually happened.
@@ -442,6 +576,69 @@ index 361af2789cbdd7d7edd82380ae932648a4cc06ad..c547dddd6ce29b090838ca5af6970f3b
    },
    "packages": {
      "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
+diff --git a/launcher/electron/browser-helper-verifier.cjs b/launcher/electron/browser-helper-verifier.cjs
+index f13998ebf44dc7439637113f8969033b02240816..512ad4cd99860aa637f33b4f656df4897847cdf5 100644
+--- a/launcher/electron/browser-helper-verifier.cjs
++++ b/launcher/electron/browser-helper-verifier.cjs
+@@ -3,6 +3,9 @@ const { randomBytes } = require("node:crypto");
+ const { createInterface } = require("node:readline");
+ 
+ const BROWSER_HELPER_OPERATION_TIMEOUT_MS = 90_000;
++const BROWSER_HELPER_SHUTDOWN_GRACE_MS = 1_000;
++const BROWSER_HELPER_TERMINATION_GRACE_MS = 1_000;
++const BROWSER_HELPER_FORCE_EXIT_MS = 1_000;
+ 
+ function waitForExit(child, timeoutMs) {
+   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+@@ -38,12 +41,16 @@ function writeMessage(child, message) {
+ async function stopChild(child) {
+   if (child.exitCode !== null || child.signalCode !== null) return;
+   await writeMessage(child, { type: "shutdown" }).catch(() => {});
+-  if (await waitForExit(child, 5_000)) return;
++  if (await waitForExit(child, BROWSER_HELPER_SHUTDOWN_GRACE_MS)) return;
+   if (!child.kill("SIGTERM") && child.exitCode === null && child.signalCode === null) {
+     throw new Error("Browser helper verification process refused termination");
+   }
+-  if (!await waitForExit(child, 2_000)) {
+-    throw new Error("Browser helper verification process did not exit after termination");
++  if (await waitForExit(child, BROWSER_HELPER_TERMINATION_GRACE_MS)) return;
++  if (!child.kill("SIGKILL") && child.exitCode === null && child.signalCode === null) {
++    throw new Error("Browser helper verification process refused forced termination");
++  }
++  if (!await waitForExit(child, BROWSER_HELPER_FORCE_EXIT_MS)) {
++    throw new Error("Browser helper verification process did not exit after forced termination");
+   }
+ }
+ 
+diff --git a/launcher/electron/browser-host.cjs b/launcher/electron/browser-host.cjs
+index 48f024a7114b3fd9e18d920e11630a1fec0703c8..6732c3bccf1cb0bc94466f23efc526e1a63bf5e4 100644
+--- a/launcher/electron/browser-host.cjs
++++ b/launcher/electron/browser-host.cjs
+@@ -442,7 +442,9 @@ class BrowserHost {
+   }
+ 
+   currentOperation() {
+-    return this.manualOperation || (this.loginOperation ? "ChatGPT login" : null);
++    return this.manualOperation
++      || (this.loginOperation ? "ChatGPT login" : null)
++      || (this.sessionRefreshOperation ? "session refresh" : null);
+   }
+ 
+   assertTurnTabsCanResetForInteractionModeChange() {
+@@ -2251,8 +2253,11 @@ class BrowserHost {
+     connectorIdentity,
+     requireRetainedConversation = false,
+   ) {
+-    if (this.manualOperation) {
+-      throw new Error(`ChatGPT browser is busy with ${this.manualOperation}`);
++    const currentOperation = this.manualOperation
++      || (this.loginOperation ? "ChatGPT login" : null)
++      || (this.sessionRefreshOperation ? "session refresh" : null);
++    if (currentOperation) {
++      throw new Error(`ChatGPT browser is busy with ${currentOperation}`);
+     }
+     if (this.userCancelledTurnOwners.has(traceId)) {
+       throw new BrowserTurnCancelledError(traceId);
 diff --git a/launcher/electron/debugging-port.cjs b/launcher/electron/debugging-port.cjs
 new file mode 100644
 index 0000000000000000000000000000000000000000..a5ffcf01242386f7738b72062a4aa0050e5c13ba
@@ -630,6 +827,38 @@ index 46deef4e61c18c5671ae5008c42ad94d059d49dd..2f3851f87a48b903a20fd83549bf8ace
      await app.whenReady();
      quitting = true;
      showMainWindow();
+diff --git a/launcher/electron/runtime.cjs b/launcher/electron/runtime.cjs
+index 11d3607b5675c36b0039531c6727b007e17b1074..ec8bb81bd533efa09cb1dd25a1a6d50990fdc8e6 100644
+--- a/launcher/electron/runtime.cjs
++++ b/launcher/electron/runtime.cjs
+@@ -16,6 +16,7 @@ const {
+ const { embeddedRuntimeInvocation, runtimeInvocation } = require("./runtime-command.cjs");
+ const { redactText } = require("./logging.cjs");
+ const { DETACH_OWNED_CHILD, terminateOwnedProcessTree } = require("./process-tree.cjs");
++const { compareVersions, parseVersion } = require("./update.cjs");
+ 
+ const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
+ const MAX_RUNTIME_LOG_LINE_CHARS = 64 * 1024;
+@@ -1163,6 +1164,19 @@ class RuntimeHost {
+     if (this.currentOperation()) throw new Error(`Another launcher operation is active: ${this.currentOperation()}`);
+     const existing = this.runtimeConfigSnapshot();
+     const currentVersion = this.app.getVersion();
++    if (existing.owner === "launcher") {
++      const configuredVersion = existing.config?.releaseVersion;
++      if (!parseVersion(currentVersion) || !parseVersion(configuredVersion)) {
++        throw new Error(
++          `Cannot compare launcher version ${currentVersion} with managed runtime ${configuredVersion}`,
++        );
++      }
++      if (compareVersions(currentVersion, configuredVersion) < 0) {
++        throw new Error(
++          `Refusing to downgrade managed runtime from ${configuredVersion} to ${currentVersion}`,
++        );
++      }
++    }
+     const connectorMigrationRequired = existing.mode === "full"
+       && isLegacyConnectorName(validateConnectorName(existing.config?.appName));
+     const interactionMode = existing.config?.browserInteractionMode ?? "automatic";
 diff --git a/launcher/package.json b/launcher/package.json
 index 66d72b8f4daf35d60a0ef03ede07cda9e24730cc..0ac20199faafb71bfcccdcd4edad352b339549a0 100644
 --- a/launcher/package.json
@@ -734,6 +963,80 @@ index 75b65e67601de4678da30b7f62a3dd20fc7ce226..192c8ef124772d39b4f6327be03e559c
      || marker.version !== expectedVersion
      || marker.platform !== process.platform) {
      throw new Error(`Unexpected packaged launcher marker: ${JSON.stringify(marker)}`);
+diff --git a/launcher/tests/browser-helper-verifier.test.cjs b/launcher/tests/browser-helper-verifier.test.cjs
+index 355b4ca1689ba06e3846f93ea40537850b10c54a..c0e24400341c83708013b463e8247b2df5be810b 100644
+--- a/launcher/tests/browser-helper-verifier.test.cjs
++++ b/launcher/tests/browser-helper-verifier.test.cjs
+@@ -60,6 +60,35 @@ test("launcher verification consumes a helper input EOF after the result", async
+   assert.deepEqual(result, { ok: true, appName: "Codex Native2" });
+ });
+ 
++test("launcher verification force-terminates a helper that ignores shutdown", async (context) => {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-browser-helper-force-stop-"));
++  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
++  const script = path.join(root, "helper.cjs");
++  fs.writeFileSync(script, `
++    const input = require("node:readline").createInterface({ input: process.stdin });
++    const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
++    send({ type: "ready" });
++    input.on("line", line => {
++      const message = JSON.parse(line);
++      if (message.type === "shutdown") return;
++      if (message.type !== "verify") return;
++      send({ type: "result", id: message.id, text: message.config.appName });
++    });
++    // SIGTERM is handled on POSIX so the verifier must escalate to SIGKILL. Windows does not
++    // provide POSIX signal semantics; its SIGTERM handling is intentionally left to Node.
++    if (process.platform !== "win32") process.on("SIGTERM", () => {});
++  `);
++
++  const result = await verifyConnectorWithBrowserHelper({
++    helper: { executable: process.execPath, script },
++    descriptorPath: "/runtime/launcher-browser.json",
++    appName: "Codex Native2",
++    logger: { info() {} },
++  });
++
++  assert.deepEqual(result, { ok: true, appName: "Codex Native2" });
++});
++
+ test("launcher verification preserves the helper error class and correlation id", async (context) => {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-browser-helper-error-"));
+   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+diff --git a/launcher/tests/browser-host.test.cjs b/launcher/tests/browser-host.test.cjs
+index 3a8b16a28624a3f4f8ae7ce8423b1d705bb5ed2a..244a614458eea95aa086bd11cd3d0bbf6020a736 100644
+--- a/launcher/tests/browser-host.test.cjs
++++ b/launcher/tests/browser-host.test.cjs
+@@ -970,6 +970,29 @@ test("explicit login waits for an in-flight saved-session refresh before taking
+   assert.deepEqual(calls, ["ChatGPT login", "probe", "inspect"]);
+ });
+ 
++test("automatic turns do not start while login or saved-session refresh owns the browser", async () => {
++  for (const fixture of [
++    {
++      manualOperation: null,
++      loginOperation: Promise.resolve(),
++      sessionRefreshOperation: null,
++      expected: "ChatGPT login",
++    },
++    {
++      manualOperation: null,
++      loginOperation: null,
++      sessionRefreshOperation: Promise.resolve(),
++      expected: "session refresh",
++    },
++  ]) {
++    fixture.currentOperation = BrowserHost.prototype.currentOperation;
++    await assert.rejects(
++      BrowserHost.prototype.beginTurn.call(fixture, "trace", false, 123, null, "connector"),
++      new RegExp(`ChatGPT browser is busy with ${fixture.expected}`),
++    );
++  }
++});
++
+ test("passkey login imports only validated state and re-proves the Launcher session", async () => {
+   const calls = [];
+   const browserSession = {
 diff --git a/launcher/tests/debugging-port.test.cjs b/launcher/tests/debugging-port.test.cjs
 new file mode 100644
 index 0000000000000000000000000000000000000000..95f0b7e83fa194c1fea93800227938c394017e4a
@@ -810,7 +1113,7 @@ index 0000000000000000000000000000000000000000..95f0b7e83fa194c1fea93800227938c3
 +  await assert.rejects(waitForDebuggingPort(file, { timeoutMs: 20 }), /did not become ready/);
 +});
 diff --git a/launcher/tests/packaging-contract.test.cjs b/launcher/tests/packaging-contract.test.cjs
-index cc69dfda169796f1f05a9ffef9f8b3a6cef8aeca..0b9d345ced23fa5ad2cd09e9e293a768c76017ec 100644
+index cc69dfda169796f1f05a9ffef9f8b3a6cef8aeca..8af06c800cdaaa17235c4606aa8ba03ebee219f4 100644
 --- a/launcher/tests/packaging-contract.test.cjs
 +++ b/launcher/tests/packaging-contract.test.cjs
 @@ -98,8 +98,10 @@ test("release installers resolve checksummed native launcher assets", () => {
@@ -835,7 +1138,7 @@ index cc69dfda169796f1f05a9ffef9f8b3a6cef8aeca..0b9d345ced23fa5ad2cd09e9e293a768
    for (const runner of ["macos-15", "macos-15-intel", "ubuntu-latest", "windows-latest"]) {
      assert.match(release, new RegExp(runner));
    }
-@@ -134,7 +136,7 @@ test("CI packages and smoke-launches on macOS, Windows, and Linux", () => {
+@@ -134,10 +136,16 @@ test("CI packages and smoke-launches on macOS, Windows, and Linux", () => {
    assert.match(release, /prepare-linux-libnotify\.sh/);
    assert.match(release, /prepare-linux-appimage-tools\.cjs/);
    assert.match(release, /archlinux:base/);
@@ -843,7 +1146,17 @@ index cc69dfda169796f1f05a9ffef9f8b3a6cef8aeca..0b9d345ced23fa5ad2cd09e9e293a768
 +  assert.match(release, /prepare-windows-baseline-bun\.ps1 -Version 1\.4\.2/);
    assert.match(release, /codesign --verify --deep --strict --verbose=2/);
    assert.match(release, /Codex Web GPT\.app/);
-   assert.doesNotMatch(release, /gh release create[\s\S]*?--draft/);
+-  assert.doesNotMatch(release, /gh release create[\s\S]*?--draft/);
++  const createCommand = release.match(/gh release create[\s\S]*?--generate-notes/)?.[0];
++  assert.ok(createCommand, "release workflow must create the GitHub release");
++  assert.doesNotMatch(createCommand, /--draft/);
++  assert.doesNotMatch(release, /--clobber/);
++  assert.match(release, /Existing release asset has no SHA-256 digest/);
++  assert.match(release, /Existing release asset differs from this build/);
++  assert.match(release, /Published release asset count mismatch/);
+ });
+ 
+ test("Linux AppImage fallback uses one owned extraction and removes it on exit", {
 diff --git a/launcher/tests/renderer-wiring.test.cjs b/launcher/tests/renderer-wiring.test.cjs
 index f8d82a0b591670ac3d9965faf7488615bb5c6eda..beb880905e515c27b8a8918753cad0236b338a6a 100644
 --- a/launcher/tests/renderer-wiring.test.cjs
@@ -882,6 +1195,31 @@ index f8d82a0b591670ac3d9965faf7488615bb5c6eda..beb880905e515c27b8a8918753cad023
    for (const [surface, position] of [
      ["CDP port allocation", cdpPortAllocation],
      ["launcher window", windowCreation],
+diff --git a/launcher/tests/runtime-host.test.cjs b/launcher/tests/runtime-host.test.cjs
+index 9458e6e6f0c0434468efdf5b8637b0438c05fbfa..a57e22c0f903a650c8b3f509fec701bef0e054ea 100644
+--- a/launcher/tests/runtime-host.test.cjs
++++ b/launcher/tests/runtime-host.test.cjs
+@@ -470,6 +470,20 @@ test("launcher update transaction leaves current and externally owned runtimes u
+   assert.equal(external.invocation(), undefined);
+ });
+ 
++test("older launcher refuses to downgrade a newer launcher-owned runtime", async () => {
++  const fixture = hostFor({
++    mode: "browser-only",
++    browserHost: "launcher",
++    releaseVersion: "1.1.4",
++  });
++
++  await assert.rejects(
++    fixture.host.upgradeManagedRuntime(),
++    /Refusing to downgrade managed runtime from 1\.1\.4 to 1\.1\.3/,
++  );
++  assert.equal(fixture.invocation(), undefined);
++});
++
+ test("MCP setup reuses valid private credentials without exposing or rewriting them", async () => {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-saved-mcp-"));
+   const keyPath = path.join(root, "tunnel-runtime.key");
 diff --git a/launcher/tests/runtime-install.test.cjs b/launcher/tests/runtime-install.test.cjs
 index 3e0b5ffd86713008226a9b9cae1d88df1b044c66..618c62776207e2ec0d55d70782e76df608d3549d 100644
 --- a/launcher/tests/runtime-install.test.cjs
@@ -896,7 +1234,7 @@ index 3e0b5ffd86713008226a9b9cae1d88df1b044c66..618c62776207e2ec0d55d70782e76df6
      arch: process.arch,
      launcher: `bin/${process.platform === "win32" ? "codex-chatgpt-web.cmd" : "codex-chatgpt-web"}`,
 diff --git a/package.json b/package.json
-index a0bf5d53f74ad608dddb8c4b34b6d4a4e9ab9b37..70ff1aaeb24b4fb788fd879fa62b6770136eb677 100644
+index c9a15e27e2bd9fb9dac1271a34e761685ad56044..18e617c845d322bd6de9e95dd518bf66d2c5cbb9 100644
 --- a/package.json
 +++ b/package.json
 @@ -11,7 +11,7 @@
@@ -908,7 +1246,7 @@ index a0bf5d53f74ad608dddb8c4b34b6d4a4e9ab9b37..70ff1aaeb24b4fb788fd879fa62b6770
    "type": "module",
    "bin": {
      "codex-chatgpt-web": "./src/cli.ts"
-@@ -65,12 +65,12 @@
+@@ -66,12 +66,12 @@
      "zod": "4.4.3"
    },
    "devDependencies": {
@@ -1023,6 +1361,19 @@ index fce4b84b53a2d5c1233d32df02dd489ecefa1b66..b7c1c01183defc064c134aa7754e5a32
      ...CHATGPT_WEB_MODEL_ROUTES.slice(1).map(route => route.slug),
    ];
    if (JSON.stringify(spawnOverrides) !== JSON.stringify(expectedSpawnOverrides)) {
+diff --git a/scripts/smoke-codex-environment.ts b/scripts/smoke-codex-environment.ts
+index 1bf47b9f241bc846c839cb73681beb17323cb312..61ff68ef53b8b588cd5883c69e695729fbb3b791 100644
+--- a/scripts/smoke-codex-environment.ts
++++ b/scripts/smoke-codex-environment.ts
+@@ -143,7 +143,7 @@ const server = Bun.serve({
+       failures.push(cause.message);
+       stream = failure(cause);
+     }
+-    return new Response(bridgeToResponsesSSE(stream, "chatgpt-web/pro", namespaces), {
++    return new Response(bridgeToResponsesSSE(stream, "chatgpt-web/pro", new Map([...namespaces].map(([wireName, tool]) => [wireName, { ...tool, wireName, description: "", kind: "function" as const, parameters: {} }]))), {
+       headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+     });
+   },
 diff --git a/scripts/smoke-codex-subagents.ts b/scripts/smoke-codex-subagents.ts
 index 72319f640e8ce781bf5d4fd4aff2802f56869b9e..661a4770ec84e2a7f251292687a412a9b40a61e0 100644
 --- a/scripts/smoke-codex-subagents.ts
@@ -1094,10 +1445,10 @@ index 72319f640e8ce781bf5d4fd4aff2802f56869b9e..661a4770ec84e2a7f251292687a412a9
          headers: {
            "content-type": "text/event-stream",
 diff --git a/src/adapters/chatgpt-web/browser-worker.ts b/src/adapters/chatgpt-web/browser-worker.ts
-index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b60740d52 100644
+index 220176d8aec6fb279e6bc888d543f9fab000fdb4..8f59747f9057f155da5a628300e55e6c6b27fc63 100644
 --- a/src/adapters/chatgpt-web/browser-worker.ts
 +++ b/src/adapters/chatgpt-web/browser-worker.ts
-@@ -126,10 +126,20 @@ export const CHATGPT_COMPLETION_ACTION_GRACE_MS = 60_000;
+@@ -128,10 +128,20 @@ export const CHATGPT_COMPLETION_ACTION_GRACE_MS = 60_000;
  export const CHATGPT_COMPLETION_SETTLE_MS = 2_000;
  export const CHATGPT_TOOL_CONFIRMATION_TIMEOUT_MS = 60_000;
  export const MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS = 3;
@@ -1119,7 +1470,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
  /**
   * ChatGPT applies composer state asynchronously, and a fast host can reach the next step before the
   * editor has taken the previous one. This is headroom for that, not a readiness check.
-@@ -404,6 +414,50 @@ interface ChatGptPersonalizationToggleReceipt {
+@@ -406,6 +416,50 @@ interface ChatGptPersonalizationToggleReceipt {
    originalIndex: ChatGptPersonalizationChoiceIndex;
  }
  
@@ -1170,7 +1521,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
  async function readChatGptPersonalizationCheckedIndex(
    choices: Locator,
    deadline: number,
-@@ -582,35 +636,52 @@ async function ensureChatGptPersonalizedConnectorAccessWithinDeadline(
+@@ -584,35 +638,52 @@ async function ensureChatGptPersonalizedConnectorAccessWithinDeadline(
          await capture("personalization-already-enabled");
          return "already-personalized";
        }
@@ -1243,7 +1594,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
      }
    }
    if (personalizedCount === 1 && unpersonalizedCount === 0) {
-@@ -953,20 +1024,20 @@ export function assertChatGptWebMultipartInputWithinLimits(
+@@ -1013,20 +1084,20 @@ export function assertChatGptWebMultipartInputWithinLimits(
      );
      if (browserComposerCharLimit !== undefined && messageChars > browserComposerCharLimit) {
        throw new ChatGptWebAdapterError(
@@ -1267,14 +1618,14 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
          { status: 400, errorType: "invalid_request_error", code: "context_length_exceeded", retryable: false },
        );
      }
-@@ -1186,6 +1257,14 @@ export interface BrowserTurn {
+@@ -1247,6 +1318,14 @@ export interface BrowserTurn {
    requireRetainedConversation?: boolean;
    conversationKey?: string;
    onPreparedSelected?: (reused: boolean) => void | Promise<void>;
 +  /** Preflight completed before any browser mutation; records only transport measurements. */
 +  onPrepared?: (details: {
 +    transport: "inline" | "mcp" | "multipart";
-+    multipartParts?: 2 | 3;
++    multipartParts?: 2 | 6;
 +    inputTokens: number;
 +    messageTokens: number;
 +    maxMessageChars: number;
@@ -1282,7 +1633,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
    abortSignal?: AbortSignal;
    onHeartbeat?: () => void;
    /** Send activation is the ambiguity boundary after which a fresh surface must not replay this prompt. */
-@@ -1296,6 +1375,7 @@ export function chatGptSubmissionEvidence(state: {
+@@ -1357,6 +1436,7 @@ export function chatGptSubmissionEvidence(state: {
  }
  
  export type ChatGptConnectorAttachmentMode = "none" | "mention" | "retained";
@@ -1290,7 +1641,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
  
  /** A launcher lease may reuse a connector only after proving that exact retained surface is bound. */
  export function chatGptConnectorAttachmentMode(
-@@ -3088,7 +3168,9 @@ export class ChatGptBrowserWorker {
+@@ -3201,7 +3281,9 @@ export class ChatGptBrowserWorker {
      catalogRefreshAvailable = false,
      attemptBudget: ChatGptConnectorAttemptBudget = { triggerAttempts: 0 },
      abortSignal?: AbortSignal,
@@ -1300,7 +1651,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
      const capture = async (checkpoint: string): Promise<void> => {
        throwIfPromptAttachmentAborted(abortSignal);
        await withBrowserTurnAbort(captureDiagnostic?.(checkpoint) ?? Promise.resolve(), abortSignal);
-@@ -3099,64 +3181,68 @@ export class ChatGptBrowserWorker {
+@@ -3212,64 +3294,68 @@ export class ChatGptBrowserWorker {
      const appResult = menuRows.filter({
        has: page.getByText(this.config.appName, { exact: true }),
      });
@@ -1424,7 +1775,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
      try {
        composer = await this.activeComposer(page, 30_000, abortSignal);
        if (await this.connectorIsSelected(composer, abortSignal)) {
-@@ -3172,7 +3258,7 @@ export class ChatGptBrowserWorker {
+@@ -3285,7 +3371,7 @@ export class ChatGptBrowserWorker {
          await composer.fill("", { signal: abortSignal, timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS });
          await composer.focus({ signal: abortSignal, timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS });
          await withBrowserTurnAbort(settleChatGptUi(), abortSignal);
@@ -1433,7 +1784,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
            delay: 25,
            signal: abortSignal,
            timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS,
-@@ -3205,8 +3291,8 @@ export class ChatGptBrowserWorker {
+@@ -3318,8 +3404,8 @@ export class ChatGptBrowserWorker {
            }
            if (
              catalogRefreshAvailable
@@ -1443,7 +1794,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
              && attemptBudget.triggerAttempts < MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS
            ) {
              throw new ChatGptConnectorCatalogStaleError(
-@@ -3305,13 +3391,37 @@ export class ChatGptBrowserWorker {
+@@ -3418,13 +3504,37 @@ export class ChatGptBrowserWorker {
      let composerMutationStarted = false;
      try {
        if (connectorMode !== "mention") {
@@ -1482,7 +1833,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
          if (requireThink) {
            await setChatGptThinkMode(composer.locator("xpath=ancestor::form[1]"), true, captureDiagnostic, abortSignal);
          }
-@@ -4261,73 +4371,85 @@ export class ChatGptBrowserWorker {
+@@ -4374,73 +4484,85 @@ export class ChatGptBrowserWorker {
      if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
      if (this.config.browserHost !== "launcher") return this.runBrowserTurn(turn);
  
@@ -1631,7 +1982,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
        try {
          const release = await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
            phase: "end",
-@@ -4349,7 +4471,23 @@ export class ChatGptBrowserWorker {
+@@ -4462,7 +4584,23 @@ export class ChatGptBrowserWorker {
          console.error(
            `[chatgpt-web] launcher turn-end notification failed after browser error: ${controlError instanceof Error ? controlError.message : String(controlError)}`,
          );
@@ -1655,13 +2006,13 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
      }
    }
  
-@@ -4450,6 +4588,13 @@ export class ChatGptBrowserWorker {
+@@ -4564,6 +4702,13 @@ export class ChatGptBrowserWorker {
            maxMessageChars,
          );
        }
 +      await turn.onPrepared?.({
 +        transport: prepared.contextTransport ? "mcp" : prepared.multipart ? "multipart" : "inline",
-+        ...(prepared.multipart ? { multipartParts: prepared.multipart.parts.length as 2 | 3 } : {}),
++        ...(prepared.multipart ? { multipartParts: prepared.multipart.parts.length as 2 | 6 } : {}),
 +        inputTokens: estimatedInputTokens,
 +        messageTokens: estimatedMessageTokens,
 +        maxMessageChars,
@@ -1669,7 +2020,7 @@ index 70950cdd1516489deb79cabd75c3367dc3c09221..cc11122688ec2535c56a1c0f44f38d6b
        const deadline = this.config.turnTimeoutMs === undefined
          ? undefined
          : Date.now() + this.config.turnTimeoutMs;
-@@ -4753,6 +4898,7 @@ export class ChatGptBrowserWorker {
+@@ -4872,6 +5017,7 @@ export class ChatGptBrowserWorker {
          } catch (error) {
            if (!(error instanceof ChatGptConnectorCatalogStaleError) || !catalogRefreshAvailable) throw error;
            catalogRefreshAvailable = false;
@@ -1793,10 +2144,10 @@ index 6eecc581d4c6699fc05b7d1618f63f975d053753..4274d1bfde19b150b505f5d258040cd4
        // physical settlement separately, so this helper must not turn its own deadline into an
 diff --git a/src/adapters/chatgpt-web/context-transport.ts b/src/adapters/chatgpt-web/context-transport.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3c75f7cbf
+index 0000000000000000000000000000000000000000..22b3665d297091c5e6955d87ab5a29f60ab24099
 --- /dev/null
 +++ b/src/adapters/chatgpt-web/context-transport.ts
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,147 @@
 +import { createHash } from "node:crypto";
 +
 +export const CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS = 32_768;
@@ -1840,14 +2191,14 @@ index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3
 +
 +export function createChatGptWebMcpContextTransport(text: string): ChatGptWebMcpContextTransport {
 +  const sha256 = contextSha256(text);
-+  return {
++  return Object.freeze({
 +    contextId: contextId(sha256),
 +    sha256,
 +    chars: text.length,
 +    bytes: Buffer.byteLength(text, "utf8"),
 +    chunkChars: CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS,
 +    text,
-+  };
++  });
 +}
 +
 +export function assertChatGptWebMcpContextTransport(
@@ -1865,7 +2216,7 @@ index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3
 +  if (value.chunkChars !== CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS) {
 +    throw new Error("Codex MCP context chunk size is unsupported");
 +  }
-+  return structuredClone(expected);
++  return expected;
 +}
 +
 +export function chatGptWebMcpContextManifest(
@@ -1880,9 +2231,16 @@ index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3
 +  };
 +}
 +
-+export function chatGptWebMcpContextChunks(
++// Validated turn envelopes are immutable. Keep their partition alive only as long as the envelope,
++// and do not repartition the entire payload on every sequential or repeated MCP chunk read.
++const contextChunkCache = new WeakMap<ChatGptWebMcpContextTransport, readonly string[]>();
++
++function contextChunks(
 +  context: ChatGptWebMcpContextTransport,
-+): string[] {
++): readonly string[] {
++  const cacheable = Object.isFrozen(context);
++  const cached = cacheable ? contextChunkCache.get(context) : undefined;
++  if (cached) return cached;
 +  const chunks: string[] = [];
 +  let offset = 0;
 +  while (offset < context.text.length) {
@@ -1903,7 +2261,16 @@ index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3
 +    chunks.push(context.text.slice(offset, end));
 +    offset = end;
 +  }
-+  return chunks.length > 0 ? chunks : [""];
++  if (chunks.length === 0) chunks.push("");
++  if (cacheable) contextChunkCache.set(context, chunks);
++  return chunks;
++}
++
++export function chatGptWebMcpContextChunks(
++  context: ChatGptWebMcpContextTransport,
++): string[] {
++  // Do not expose the cached array to callers that may mutate the returned list.
++  return [...contextChunks(context)];
 +}
 +
 +export function chatGptWebMcpContextChunk(
@@ -1915,7 +2282,7 @@ index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3
 +    throw new Error("Codex MCP context id does not match this turn");
 +  }
 +  if (!Number.isSafeInteger(chunk) || chunk < 0) throw new Error("Codex MCP context chunk is invalid");
-+  const chunks = chatGptWebMcpContextChunks(context);
++  const chunks = contextChunks(context);
 +  if (chunk >= chunks.length) throw new Error("Codex MCP context chunk is out of range");
 +  return {
 +    context_id: context.contextId,
@@ -1930,17 +2297,21 @@ index 0000000000000000000000000000000000000000..ef15c01223a50f735b127bb9a87bafc3
 +}
 diff --git a/src/adapters/chatgpt-web/in-flight-journal.ts b/src/adapters/chatgpt-web/in-flight-journal.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbccc1fa355c
+index 0000000000000000000000000000000000000000..0ac99cce0801dc8ad9ffd0838ec2049d3fd2203b
 --- /dev/null
 +++ b/src/adapters/chatgpt-web/in-flight-journal.ts
-@@ -0,0 +1,356 @@
+@@ -0,0 +1,381 @@
 +import { randomUUID } from "node:crypto";
 +import { existsSync, readFileSync } from "node:fs";
 +import { join } from "node:path";
 +import { atomicWriteFile, getConfigDir } from "../../config";
 +import { ChatGptWebAdapterError } from "./adapter-error";
 +import type { ChatGptWebTelemetryPrepared } from "./turn-telemetry";
-+import type { ChatGptWebMultipartPartCount } from "./prompt";
++import { isChatGptWebMultipartPartCount, type ChatGptWebMultipartPartCount } from "./prompt";
++
++// Three-part records can remain on disk from older custom builds. Keep their replay guard even
++// though new requests use the current prompt compiler's supported part counts.
++type PersistedMultipartPartCount = ChatGptWebMultipartPartCount | 3;
 +
 +export type ChatGptWebInFlightPhase =
 +  | "prepared"
@@ -1967,7 +2338,7 @@ index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbcc
 +  terminal: boolean;
 +  uncertain: boolean;
 +  acknowledgedParts: number;
-+  multipartParts?: ChatGptWebMultipartPartCount;
++  multipartParts?: PersistedMultipartPartCount;
 +  transport?: ChatGptWebTelemetryPrepared["transport"];
 +  createdAt: number;
 +  updatedAt: number;
@@ -2028,8 +2399,8 @@ index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbcc
 +  return ["prepared", "send_activated", "accepted", "completed", "failed", "aborted"].includes(String(value));
 +}
 +
-+function isMultipartParts(value: unknown): value is ChatGptWebMultipartPartCount {
-+  return value === 2 || value === 3;
++function isMultipartParts(value: unknown): value is PersistedMultipartPartCount {
++  return value === 3 || (typeof value === "number" && isChatGptWebMultipartPartCount(value));
 +}
 +
 +function parsedRecord(value: unknown): ChatGptWebInFlightRecord | undefined {
@@ -2117,7 +2488,11 @@ index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbcc
 +    private readonly path = join(getConfigDir(), "browser-in-flight.json"),
 +    private readonly ttlMs = JOURNAL_TTL_MS,
 +    ownerId: string = randomUUID(),
++    private readonly maxEntries = MAX_JOURNAL_ENTRIES,
 +  ) {
++    if (!Number.isSafeInteger(this.maxEntries) || this.maxEntries < 1) {
++      throw new Error("ChatGPT Web in-flight journal capacity must be a positive safe integer");
++    }
 +    this.ownerId = ownerId;
 +    this.load();
 +  }
@@ -2136,6 +2511,23 @@ index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbcc
 +        throw new ChatGptWebInFlightRecoveryError(existing);
 +      } else {
 +        return this.handle(existing.key);
++      }
++    }
++    if (!this.records.has(descriptor.key)) {
++      while (this.records.size >= this.maxEntries) {
++        const candidate = [...this.records.values()]
++          .filter(record => record.terminal)
++          .sort((left, right) => left.updatedAt - right.updatedAt)[0];
++        if (!candidate) break;
++        this.records.delete(candidate.key);
++      }
++      if (this.records.size >= this.maxEntries) {
++        throw new ChatGptWebAdapterError("ChatGPT Web in-flight safety journal is full; unresolved ambiguous turns cannot be discarded safely", {
++          status: 503,
++          errorType: "server_error",
++          code: "in_flight_journal_full",
++          retryable: false,
++        });
 +      }
 +    }
 +    const record: ChatGptWebInFlightRecord = {
@@ -2268,7 +2660,7 @@ index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbcc
 +    for (const [key, record] of this.records) {
 +      if (record.terminal && record.updatedAt < cutoff) this.records.delete(key);
 +    }
-+    while (this.records.size > MAX_JOURNAL_ENTRIES) {
++    while (this.records.size > this.maxEntries) {
 +      const candidate = [...this.records.values()]
 +        .filter(record => record.terminal)
 +        .sort((left, right) => left.updatedAt - right.updatedAt)[0];
@@ -2291,7 +2683,7 @@ index 0000000000000000000000000000000000000000..1dec9a7a83cd82abaec20dceaefccbcc
 +
 +export const chatGptWebInFlightJournal = new ChatGptWebInFlightJournal();
 diff --git a/src/adapters/chatgpt-web/index.ts b/src/adapters/chatgpt-web/index.ts
-index d6f5c1e21adc6f0866139fdefb58d4b9cf9597c6..1c7361ffa15d8e56222fba388be89359cb7cbf3c 100644
+index 0a4c4df2fa18b941b874c17f29b6404d13eb1787..13276ea5b5354cd98329a6c29ff23a4819bfc3f8 100644
 --- a/src/adapters/chatgpt-web/index.ts
 +++ b/src/adapters/chatgpt-web/index.ts
 @@ -24,9 +24,11 @@ import { ChatGptWebAdapterError } from "./adapter-error";
@@ -2839,16 +3231,16 @@ index d6f5c1e21adc6f0866139fdefb58d4b9cf9597c6..1c7361ffa15d8e56222fba388be89359
                      }
                      throw handoffError;
                    } finally {
-@@ -1096,7 +1289,7 @@ export function createChatGptWebAdapter(
-               console.error("[chatgpt-web] structured context handoff failed:", handoffError);
+@@ -1097,7 +1290,7 @@ export function createChatGptWebAdapter(
+               const upstreamError = handoffError instanceof ChatGptWebAdapterError ? handoffError : undefined;
                emit({
                  type: "error",
--                message: "ChatGPT did not complete the context handoff. Retry the task.",
-+                message: `ChatGPT context handoff failed: ${handoffError.message.slice(0, 500)} (compaction trace: ${handoffTraceId})`,
-                 status: 409,
-                 errorType: "invalid_request_error",
-                 code: "compaction_handoff_failed",
-@@ -1126,16 +1319,35 @@ export function createChatGptWebAdapter(
+-                message: upstreamError?.message ?? "ChatGPT did not complete the context handoff. Retry the task.",
++                message: `${upstreamError?.message ?? "ChatGPT did not complete the context handoff. Retry the task."} (compaction trace: ${handoffTraceId})`,
+                 status: upstreamError?.status ?? 409,
+                 errorType: upstreamError?.errorType ?? "invalid_request_error",
+                 code: upstreamError?.code ?? "compaction_handoff_failed",
+@@ -1129,16 +1322,35 @@ export function createChatGptWebAdapter(
            chatGptTurnSessions.retireAbortedOwnerTurns(ownerKey, abortedTurnIds, executionKey);
          }
          const traceId = chatGptWebTraceId(provider, parsed);
@@ -2894,7 +3286,7 @@ index d6f5c1e21adc6f0866139fdefb58d4b9cf9597c6..1c7361ffa15d8e56222fba388be89359
          const roundKey = chatGptTurnRoundKey(parsed);
          const emitRoundEvents = (events: readonly AdapterEvent[]): void => {
            // Journal the complete synchronous event batch before touching the HTTP observer. If the
-@@ -1388,6 +1600,9 @@ export function createChatGptWebAdapter(
+@@ -1391,6 +1603,9 @@ export function createChatGptWebAdapter(
              throw error;
            }
            const turnError = submittedTurnFailure(session, error);
@@ -3009,7 +3401,7 @@ index 3b634e3726ab5ac83a4fc4719e7078f871923eb9..cb6a3f0737f0eceb5ffe92f981c4eabd
 +  return tokens;
  }
 diff --git a/src/adapters/chatgpt-web/launcher-helper-client.ts b/src/adapters/chatgpt-web/launcher-helper-client.ts
-index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b281608d4bd8bd 100644
+index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..e826e2347678975f5bbc65e09133b003ab797a36 100644
 --- a/src/adapters/chatgpt-web/launcher-helper-client.ts
 +++ b/src/adapters/chatgpt-web/launcher-helper-client.ts
 @@ -2,7 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -3040,11 +3432,12 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
  type HelperMessage =
    | { type: "ready"; features?: string[] }
    | { type: "event"; id: string; event: "heartbeat" | "send_activated" | "submitted" | "reasoning" | "commentary" | "text"; text?: string; continuation?: boolean }
-@@ -181,13 +191,17 @@ function parseHelperMessage(line: string): HelperMessage {
+@@ -181,13 +191,18 @@ function parseHelperMessage(line: string): HelperMessage {
  
  export class LauncherBrowserHelperClient {
    private child?: ChildProcessWithoutNullStreams;
 +  private terminatingChild?: ChildProcessWithoutNullStreams;
++  private terminatingPromise?: Promise<void>;
    private ready?: Promise<void>;
    private readyResolve?: () => void;
    private readyReject?: (error: Error) => void;
@@ -3059,7 +3452,7 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
  
    /**
     * The helper that shipped with this daemon, when one sits beside its own entrypoint.
-@@ -243,18 +257,21 @@ export class LauncherBrowserHelperClient {
+@@ -243,18 +258,21 @@ export class LauncherBrowserHelperClient {
                );
                return;
              }
@@ -3087,7 +3480,7 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
            };
            pending.abortListener = abortListener;
            turn.abortSignal.addEventListener("abort", abortListener, { once: true });
-@@ -298,7 +315,12 @@ export class LauncherBrowserHelperClient {
+@@ -298,7 +316,12 @@ export class LauncherBrowserHelperClient {
            .then(() => {
              if (!progressForwarding.signal.aborted) this.forwardProgress(turn, progressForwarding.signal);
            })
@@ -3101,7 +3494,18 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
        });
    }
  
-@@ -580,18 +602,70 @@ export class LauncherBrowserHelperClient {
+@@ -317,6 +340,10 @@ export class LauncherBrowserHelperClient {
+   }
+ 
+   private async ensureChild(): Promise<void> {
++    // A helper epoch can fail before Node reports its physical process exit (for example, an
++    // invalid protocol frame or a broken stdin pipe). Do not start a replacement helper while
++    // that previous process may still own launcher browser leases.
++    if (this.terminatingPromise) await this.terminatingPromise;
+     if (this.child
+       && !this.child.killed
+       && this.child.exitCode === null
+@@ -580,18 +607,77 @@ export class LauncherBrowserHelperClient {
    private abortWithLocalFailure(id: string, error: Error, pending: PendingTurn): void {
      if (this.pending.get(id) !== pending || pending.localFailure) return;
      pending.localFailure = error;
@@ -3143,13 +3547,20 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
 +    if (this.child !== child || this.terminatingChild === child) return;
 +    this.terminatingChild = child;
 +    console.error(`[chatgpt-web-helper] ${context}; terminating helper epoch`);
-+    void this.terminateChild(child, 0).catch(error => {
++    const termination = this.terminateChild(child, 0);
++    this.terminatingPromise = termination;
++    const clearBarrier = () => {
++      if (this.terminatingChild !== child) return;
++      this.terminatingChild = undefined;
++      this.terminatingPromise = undefined;
++    };
++    if (typeof child.once === "function") child.once("exit", clearBarrier);
++    void termination.catch(error => {
 +      console.error(
 +        `[chatgpt-web-helper] failed to terminate helper epoch: ${error instanceof Error ? error.message : String(error)}`,
 +      );
-+    }).finally(() => {
-+      if (this.terminatingChild === child) this.terminatingChild = undefined;
 +    });
++    void termination.then(clearBarrier, () => {});
 +  }
 +
 +  /**
@@ -3174,7 +3585,7 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
    /**
     * Mirrors daemon-recorded MCP progress into the helper process for the life of the turn.
     *
-@@ -634,6 +708,8 @@ export class LauncherBrowserHelperClient {
+@@ -634,6 +720,8 @@ export class LauncherBrowserHelperClient {
      if (pending.abortListener && pending.turn.abortSignal) {
        pending.turn.abortSignal.removeEventListener("abort", pending.abortListener);
      }
@@ -3184,7 +3595,7 @@ index 2225e954cbee63efd4d5b9f4d1ab74ee006d5f6f..ce963128d1c3f3e2e266016177b28160
      pending.progressForwarding = undefined;
      pending.prepared?.release();
 diff --git a/src/adapters/chatgpt-web/mcp-server.ts b/src/adapters/chatgpt-web/mcp-server.ts
-index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6ff1f5ef0 100644
+index 822809459d54c86b035c439947e4a2dda587a744..836028a63c0a19289c4178d702cb7cee81f777a5 100644
 --- a/src/adapters/chatgpt-web/mcp-server.ts
 +++ b/src/adapters/chatgpt-web/mcp-server.ts
 @@ -3,8 +3,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -3396,7 +3807,7 @@ index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6
          console.error(
            `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; retired its turn binding`,
          );
-@@ -789,27 +870,48 @@ export async function runChatGptMcpServer(options: {
+@@ -789,28 +870,49 @@ export async function runChatGptMcpServer(options: {
        async claimed => {
          const { query, offset, limit, include_schema } = input;
          const bound = claimed.environment;
@@ -3420,7 +3831,8 @@ index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6
 +          return result(response);
 +        }
          const needle = query?.trim().toLowerCase();
--        const directMatches = safeVisibleTools(bound, contract).filter(tool => !needle || [
+-        const visibleTools = safeVisibleTools(bound, contract);
+-        const directMatches = visibleTools.filter(tool => !needle || [
 -          wireName(tool),
 -          tool.name,
 -          tool.namespace ?? "",
@@ -3428,7 +3840,8 @@ index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6
 -        ].join("\n").toLowerCase().includes(needle));
 -        const directPage = directMatches.slice(offset, offset + limit).map(tool => ({
 -          wire_name: wireName(tool),
-+        const directMatches = searchCanonicalTools(visibleToolIndex(bound, contract).values(), query);
++        const visibleTools = [...visibleToolIndex(bound, contract).values()];
++        const directMatches = searchCanonicalTools(visibleTools, query);
 +        const directDescriptors = directMatches.map(tool => ({
 +          wire_name: tool.wireName,
            name: tool.name,
@@ -3455,7 +3868,7 @@ index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6
            const nestedLimit = Math.max(0, limit - directPage.length);
            const response = await invoke(claimed.bindingId, bound, gateway, {
              input: gatewayToolCatalogProgram({
-@@ -830,17 +932,16 @@ export async function runChatGptMcpServer(options: {
+@@ -831,22 +933,21 @@ export async function runChatGptMcpServer(options: {
              namespace: null,
              description: gatewayToolDescription(tool),
              kind: "gateway",
@@ -3477,10 +3890,17 @@ index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6
          const page = [...directPage, ...nestedPage];
 -        const total = directMatches.length + nestedTotal;
 +        const total = directDescriptors.length + nestedTotal;
-         return result({
-           tools: page,
-           total,
-@@ -888,8 +989,7 @@ export async function runChatGptMcpServer(options: {
+         // A filtered registry miss does not mean deferred tools are unavailable. Expose the
+         // actual native discovery entry separately; it is not a query match or an automatic call.
+         const discoveryTools = needle && total === 0
+-          ? visibleTools.filter(tool => tool.toolSearch).map(tool => ({
+-            wire_name: wireName(tool),
++          ? visibleTools.filter(tool => tool.kind === "tool_search").map(tool => ({
++            wire_name: tool.wireName,
+             name: tool.name,
+             namespace: tool.namespace ?? null,
+             description: browserToolDescription(tool),
+@@ -902,8 +1003,7 @@ export async function runChatGptMcpServer(options: {
        }
        return withClaimedTurn("codex_tool_call", requestId, extra, async claimed => {
          const bound = claimed.environment;
@@ -3490,7 +3910,7 @@ index f788c4c69d318b7b7843db112bcde6df25134345..f7d8d6b2b9733e12400b9ae8a22811f6
          if (!tool) {
            const gateway = execGateway(bound);
            const hiddenOuterTool = bound.tools.some(candidate => wireName(candidate) === wire_name);
-@@ -910,11 +1010,11 @@ export async function runChatGptMcpServer(options: {
+@@ -924,11 +1024,11 @@ export async function runChatGptMcpServer(options: {
              }, bound.tools.map(wireName)),
            }, extra.signal);
          }
@@ -3556,7 +3976,7 @@ index b477fa33f5e2ad6c4f76e714b45938705997ac33..cadae93e58831f5501b545845f3ccc37
 +  return summary;
 +}
 diff --git a/src/adapters/chatgpt-web/prompt.ts b/src/adapters/chatgpt-web/prompt.ts
-index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78cdc02e69 100644
+index 1146236af17df5b34180fe60af34054851feca69..8926df4e4333496a028cac3c0c79adc0193f23f0 100644
 --- a/src/adapters/chatgpt-web/prompt.ts
 +++ b/src/adapters/chatgpt-web/prompt.ts
 @@ -7,6 +7,13 @@ import {
@@ -3580,12 +4000,12 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
 +  /** Exact canonical context held locally when a large Full-mode turn uses MCP context transport. */
 +  contextTransport?: ChatGptWebMcpContextTransport;
    skillFiles?: ChatGptSkillFile[];
--  /** DEV-only transactional context transport. Production prompts remain inline. */
-+  /** DEV-only transactional context transport. Production prompts remain inline unless MCP-backed. */
+-  /** Transactional transport when Bigger Context is explicitly enabled. */
++  /** Transactional browser multipart transport when Bigger Context is explicitly enabled. */
    multipart?: ChatGptWebMultipartPrompt;
    /** Oldest history items removed by native-style compaction fit recovery; absent on normal turns. */
    trimmedCompactionMessages?: number;
-@@ -320,16 +329,125 @@ type MultipartContextRecord =
+@@ -322,16 +331,125 @@ type MultipartContextRecord =
    | { kind: "system"; system_index: number; content: string }
    | { kind: "message"; message_index: number; message: Record<string, unknown> };
  
@@ -3712,7 +4132,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
  function partitionMultipartRecordWeights(
    weights: readonly MultipartRecordWeight[],
    budgets: readonly MultipartRecordWeight[],
-@@ -368,6 +486,9 @@ function partitionMultipartRecordWeights(
+@@ -370,6 +488,9 @@ function partitionMultipartRecordWeights(
      if (boundaries(candidate).at(-1) === weights.length) upper = candidate;
      else lower = candidate + 1;
    }
@@ -3722,7 +4142,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
    return boundaries(lower);
  }
  
-@@ -386,17 +507,24 @@ function partitionMultipartContext(
+@@ -388,17 +509,24 @@ function partitionMultipartContext(
    budgets: readonly MultipartRecordWeight[],
  ): ChatGptWebMultipartParts {
    if (budgets.length !== totalParts) throw new Error("ChatGPT multipart budget count does not match parts");
@@ -3751,7 +4171,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
      part_index: index + 1,
      total_parts: totalParts,
      records: group,
-@@ -484,6 +612,9 @@ export function compileChatGptWebPrompt(
+@@ -485,6 +613,9 @@ export function compileChatGptWebPrompt(
      multipartEnabled
        ? "Read and reconstruct every acknowledged staged JSON record before acting."
        : "Read the complete inline JSON task context before acting.",
@@ -3761,7 +4181,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
      manualControl
        ? "Each image_attachment in the context refers, in order, to an image the user manually attached to this ChatGPT message. If its corresponding image is absent, say that it was not provided instead of guessing."
        : multipartEnabled
-@@ -492,6 +623,7 @@ export function compileChatGptWebPrompt(
+@@ -493,6 +624,7 @@ export function compileChatGptWebPrompt(
      "If a ChatGPT-native capability renders a rich card, widget, chart, or other non-text result, also provide the relevant result as ordinary Markdown in the final answer. A private ChatGPT UI widget never replaces the Markdown answer returned to Codex.",
      "Never copy a ChatGPT widget's HTML, CSS, class names, or DOM markup into the answer unless the user explicitly requested that source markup.",
      "Do not mention this transport contract, context packaging, or capability routing in the user-facing answer unless the user explicitly asks how the bridge works.",
@@ -3769,7 +4189,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
    ];
    const transportContract = parsed._compactionRequest
      ? manualControl
-@@ -501,12 +633,15 @@ export function compileChatGptWebPrompt(
+@@ -502,12 +634,15 @@ export function compileChatGptWebPrompt(
        ]
        : [
        "This is a Codex history-compaction checkpoint, not a normal task turn.",
@@ -3786,7 +4206,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
        "Call a Codex Native tool only when the latest active request requires a local effect or fresh local evidence that is not already present in the supplied context; otherwise answer the request directly without a tool call.",
        "Use actual Codex Native results as evidence for local observations and effects.",
        "A Codex Native MCP tool result may require context compaction. If it does, follow the compaction instructions in that result exactly.",
-@@ -589,6 +724,7 @@ export function compileChatGptWebPrompt(
+@@ -590,6 +725,7 @@ export function compileChatGptWebPrompt(
        "The task context is complete. Execute the latest active user request now under the capability contract above.",
        "</codex_transport_resume>",
      ];
@@ -3794,7 +4214,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
    const build = (sourceMessages: readonly CodexMessage[], omittedMessages = 0): CompiledChatGptWebPrompt => {
      const images: ChatGptWebPromptImage[] = [];
      const budget: ImageBudget = {
-@@ -611,7 +747,66 @@ export function compileChatGptWebPrompt(
+@@ -612,7 +748,66 @@ export function compileChatGptWebPrompt(
      const answerContract = captureLunaCheckpoint
        ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."
        : "Return only the answer that the outer Codex task should receive.";
@@ -3861,7 +4281,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
        const records: MultipartContextRecord[] = [
          ...system.map((content, system_index) => ({ kind: "system" as const, system_index, content })),
          ...messages.map((message, message_index) => ({
-@@ -621,7 +816,7 @@ export function compileChatGptWebPrompt(
+@@ -622,7 +817,7 @@ export function compileChatGptWebPrompt(
          })),
        ];
        const emptyPart = (index: number): string => JSON.stringify({
@@ -3869,8 +4289,8 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
 +        version: 2, part_index: index + 1, total_parts: multipartParts, records: [],
        });
        const multipart: ChatGptWebMultipartPrompt = {
-         parts: multipartParts === 2
-@@ -635,7 +830,7 @@ export function compileChatGptWebPrompt(
+         parts: Array.from({ length: multipartParts! }, (_, index) => emptyPart(index)),
+@@ -634,7 +829,7 @@ export function compileChatGptWebPrompt(
            ...manualControlContract,
            ...checkpointContract,
            answerContract,
@@ -3879,7 +4299,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
          ].join("\n"),
        };
        const imageTokens = images.reduce((sum, image) => sum + chatGptWebImageTokenReserve(image.detail), 0);
-@@ -663,7 +858,6 @@ export function compileChatGptWebPrompt(
+@@ -662,7 +857,6 @@ export function compileChatGptWebPrompt(
        multipart.parts = partitionMultipartContext(records, multipartParts!, budgets);
        return { text: multipart.commit, images, ...attachments, multipart };
      }
@@ -3887,7 +4307,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
      const text = [
        ...sharedContract,
        ...skillContract,
-@@ -690,7 +884,33 @@ export function compileChatGptWebPrompt(
+@@ -689,7 +883,33 @@ export function compileChatGptWebPrompt(
  
    let sourceMessages = withoutSupersededModelSwitchContracts(parsed.context.messages);
    const initialMessageCount = sourceMessages.length;
@@ -3922,7 +4342,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
    if (!parsed._compactionRequest) return compiled;
  
    // The 110k edge budget was measured for the old single-message compaction envelope. Bigger
-@@ -698,7 +918,9 @@ export function compileChatGptWebPrompt(
+@@ -697,7 +917,9 @@ export function compileChatGptWebPrompt(
    // as ordinary multipart turns in browser-worker. Applying the legacy byte cap here silently
    // discarded context that the staged transport can carry; preserve it and let browser preflight
    // fail explicitly if any atomic record is genuinely too large for one stage.
@@ -3933,7 +4353,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
  
    const exceedsCompactionBudget = (): boolean => (
      chatGptPromptJsonBytes(compiled.text) > CHATGPT_COMPACTION_PROMPT_JSON_BYTE_BUDGET
-@@ -714,8 +936,9 @@ export function compileChatGptWebPrompt(
+@@ -713,8 +935,9 @@ export function compileChatGptWebPrompt(
      if (discardIndex === sourceMessages.length - 1) break;
      sourceMessages.splice(discardIndex, 1);
      if (checkpointIndex > discardIndex) checkpointIndex -= 1;
@@ -3944,7 +4364,7 @@ index c202423678622f34238c4180d295ec7b98b1cac4..e31b3f8f97c7b64e060a02883a890f78
    }
    const encodedBytes = chatGptPromptJsonBytes(compiled.text);
    if (exceedsCompactionBudget()) {
-@@ -723,6 +946,26 @@ export function compileChatGptWebPrompt(
+@@ -722,6 +945,26 @@ export function compileChatGptWebPrompt(
        `ChatGPT Web compaction prompt still requires ${encodedBytes.toLocaleString("en-US")} JSON bytes after other history was trimmed; ${checkpointIndex >= 0 ? "the cumulative checkpoint and final compaction instruction exceed" : "the final compaction instruction alone exceeds"} the browser compaction budget`,
      );
    }
@@ -4079,7 +4499,7 @@ index 53fda4fd2e7e25d30969e89a59bdc9b7be69d1f4..1acaed36ccdeadada5a25017555fe7f7
      for (const [key, entry] of this.entries) {
        if (now - entry.updatedAt >= this.ttlMs) this.entries.delete(key);
 diff --git a/src/adapters/chatgpt-web/turn-broker.ts b/src/adapters/chatgpt-web/turn-broker.ts
-index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f2099cefd94 100644
+index 34f320f68528af56a148f7c4dbc27992cccf71e3..7e26d9ba30911f32ed72fb232d7ad6a0fc75fc02 100644
 --- a/src/adapters/chatgpt-web/turn-broker.ts
 +++ b/src/adapters/chatgpt-web/turn-broker.ts
 @@ -3,10 +3,17 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs
@@ -4188,7 +4608,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
    async nextToolBatch(token: string, signal?: AbortSignal): Promise<BrokerToolRequest[]> {
      this.prune();
      let channel = this.channels.get(token);
-@@ -877,7 +916,7 @@ export class TurnBroker implements TurnBrokerOwner {
+@@ -884,7 +923,7 @@ export class TurnBroker implements TurnBrokerOwner {
      if (!request || typeof request !== "object" || typeof request.id !== "string" || request.id.length === 0 || request.id.length > 256) {
        throw new Error("turn broker request id is invalid");
      }
@@ -4197,7 +4617,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
        throw new Error("turn broker method is invalid");
      }
    }
-@@ -913,7 +952,7 @@ export class TurnBroker implements TurnBrokerOwner {
+@@ -920,7 +959,7 @@ export class TurnBroker implements TurnBrokerOwner {
        return { submitted: true };
      }
      if (request.method === "owner_status") {
@@ -4206,7 +4626,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
      }
      if (request.method === "owner_register") {
        const environment = ownerEnvironment(request.environment);
-@@ -941,6 +980,15 @@ export class TurnBroker implements TurnBrokerOwner {
+@@ -948,6 +987,15 @@ export class TurnBroker implements TurnBrokerOwner {
        this.updateEnvironment(request.token, ownerEnvironment(request.environment));
        return { updated: true };
      }
@@ -4222,7 +4642,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
      if (request.method === "owner_safe_sent") {
        if (!request.token) throw new Error("turn owner token is required");
        assertSurfaceNonce(request.surfaceNonce);
-@@ -1050,13 +1098,27 @@ export class TurnBroker implements TurnBrokerOwner {
+@@ -1057,13 +1105,27 @@ export class TurnBroker implements TurnBrokerOwner {
          if (!existing || existing.token !== token || existing.channel !== activeChannel) {
            throw new Error("turn token binding state is inconsistent");
          }
@@ -4252,7 +4672,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
      }
  
      const bindingId = request.bindingId;
-@@ -1101,6 +1163,18 @@ export class TurnBroker implements TurnBrokerOwner {
+@@ -1108,6 +1170,18 @@ export class TurnBroker implements TurnBrokerOwner {
        return { released: true };
      }
      if (request.method === "resolve") return { environment: binding.channel.environment };
@@ -4271,7 +4691,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
      this.assertSafeHarnessRunning(binding.channel);
      if (binding.channel.compactionRequested) {
        const result = binding.channel.compactionResult;
-@@ -1114,13 +1188,21 @@ export class TurnBroker implements TurnBrokerOwner {
+@@ -1121,13 +1195,21 @@ export class TurnBroker implements TurnBrokerOwner {
  
      const wireName = request.wireName?.trim();
      if (!wireName) throw new Error("wire tool name is required");
@@ -4295,7 +4715,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
      return new Promise<BrokerToolResult>((resolveInvoke, rejectInvoke) => {
        binding.channel.invocations.set(callId, { request: toolRequest, resolve: resolveInvoke, reject: rejectInvoke });
        binding.channel.queuedCallIds.push(callId);
-@@ -1284,6 +1366,12 @@ export async function callTurnBroker<T>(
+@@ -1297,6 +1379,12 @@ export async function callTurnBroker<T>(
          // frame is therefore the terminal boundary; ordinary calls still wait for physical close.
          finishResponse();
          socket.destroy();
@@ -4308,7 +4728,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
        }
      });
    });
-@@ -1307,7 +1395,7 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
+@@ -1320,7 +1408,7 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
          + ` (${error instanceof Error ? error.message : String(error)})`,
        );
      }
@@ -4317,7 +4737,7 @@ index f7151b0b101318d209e5a4312f3c00119d566a5b..accf0be4526fb78aaab28f8ea6732f20
        throw new Error(`Unsupported DEV turn-owner protocol version: ${String(status.protocolVersion)}`);
      }
      if (status.acceptingExternalOwners !== true) {
-@@ -1352,6 +1440,14 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
+@@ -1365,6 +1453,14 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
      await callTurnBroker(this.socketPath, { method: "owner_update", token, environment });
    }
  
@@ -4564,10 +4984,10 @@ index 0000000000000000000000000000000000000000..b981d4af37fd09e89dd2db0a29cae3ce
 +
 +export const chatGptWebTurnTelemetry = new ChatGptWebTurnTelemetry();
 diff --git a/src/adapters/chatgpt-web/usage.ts b/src/adapters/chatgpt-web/usage.ts
-index cfd38b6cb22e55a5d2e1537e9d111efe3e65d244..fe75881707feec7008c5fedc1945692b12bd0eff 100644
+index 73d0940d353b43c391d32097ee785d9d1fa30b12..2d105bd7979bfebe39bdb51b0ef588946b0c0670 100644
 --- a/src/adapters/chatgpt-web/usage.ts
 +++ b/src/adapters/chatgpt-web/usage.ts
-@@ -11,12 +11,14 @@ import type { CodexParsedRequest, CodexUsage } from "../../types";
+@@ -12,12 +12,14 @@ import type { CodexParsedRequest, CodexUsage } from "../../types";
  import { compiledChatGptWebMessages, estimateChatGptWebImageTokens, estimateCompiledChatGptWebInputTokens } from "./input-tokens";
  import {
    CHATGPT_BIGGER_CONTEXT_PARTS,
@@ -4583,7 +5003,7 @@ index cfd38b6cb22e55a5d2e1537e9d111efe3e65d244..fe75881707feec7008c5fedc1945692b
  import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
  import type { BrokerToolRequest } from "./turn-broker";
  
-@@ -44,7 +46,7 @@ export function estimateChatGptWebInputTokens(
+@@ -45,7 +47,7 @@ export function estimateChatGptWebInputTokens(
      ? { localTools: true }
      : resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
    const identity = extractChatGptTurnIdentity(parsed);
@@ -4592,17 +5012,17 @@ index cfd38b6cb22e55a5d2e1537e9d111efe3e65d244..fe75881707feec7008c5fedc1945692b
      parsed,
      capabilities,
      mode.localTools ? ESTIMATE_TURN_TOKEN : undefined,
-@@ -62,7 +64,8 @@ export function estimateChatGptWebInputTokens(
+@@ -63,7 +65,8 @@ export function estimateChatGptWebInputTokens(
  /**
   * The compaction threshold chooses the initial part count. Whole records and composer limits
   * can require more parts even when the total token estimate is small. Plan before submission;
-- * compaction always receives all three parts without passing through the legacy inline budget.
+- * compaction always receives all six parts without passing through the legacy inline budget.
 + * compaction prefers the cheapest transport that passes the same preflight checks. Oversized
-+ * histories still fall back to all three parts without passing through the legacy inline budget.
++ * histories fall back to the six-part transport maximum without changing the advertised 3× window.
   */
  export function resolveBiggerContextMultipartParts(
    parsed: CodexParsedRequest,
-@@ -76,21 +79,15 @@ export function resolveBiggerContextMultipartParts(
+@@ -77,21 +80,15 @@ export function resolveBiggerContextMultipartParts(
      throw new Error("Bigger Context is unavailable for Luna because its accumulated browser transcript still shares one 28,000-token transport budget");
    }
    const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
@@ -4625,9 +5045,9 @@ index cfd38b6cb22e55a5d2e1537e9d111efe3e65d244..fe75881707feec7008c5fedc1945692b
    const fits = (compiled: CompiledChatGptWebPrompt): boolean => {
      const messages = compiledChatGptWebMessages(compiled);
      // Inert stages may use any explicitly available staging effort; execution keeps the chosen
-@@ -108,8 +105,42 @@ export function resolveBiggerContextMultipartParts(
-     }
-     return estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId) < contextWindow * messages.length;
+@@ -110,8 +107,42 @@ export function resolveBiggerContextMultipartParts(
+     return estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId)
+       < contextWindow * Math.min(messages.length, CHATGPT_WEB_BIGGER_CONTEXT_MULTIPLIER);
    };
 +  const isCompactionCapacityFailure = (error: unknown): boolean => (
 +    error instanceof ChatGptWebMultipartCapacityError
@@ -5372,6 +5792,21 @@ index e479c6d561071d6e6e41959a3611afc4558f053d..f5965ffd2706eb4defcc1f4bdf08ffba
      // Code mode collapses the outer registry into an exec gateway; routed models need the regular
      // Responses tool surface so MCP namespaces, deferred tool_search, and custom tools reach us.
      tool_mode: null,
+diff --git a/src/native-network.ts b/src/native-network.ts
+index e70f60b3bddbef04f69f73ba136ebe8bdeb34915..29c20d29ccad803aa2fc08fa22bff065f6325295 100644
+--- a/src/native-network.ts
++++ b/src/native-network.ts
+@@ -29,7 +29,9 @@ export async function fetchNativeCodex(request: Request): Promise<Response> {
+   const descriptorPath = process.env.CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR?.trim();
+   // Standalone CLI and explicitly configured proxy environments retain Bun's existing semantics,
+   // including NO_PROXY. No proxy variables or machine-wide settings are rewritten.
+-  if (!descriptorPath || ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
++  if (!descriptorPath || [
++    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy",
++  ]
+     .some(key => process.env[key]?.trim())) return fetch(request);
+ 
+   const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
 diff --git a/src/responses/compaction.ts b/src/responses/compaction.ts
 index 29e7d6de6b0436466941a984f4cf7307c745ee4c..45760db6a280d58da46b49c70451399fe6ca44b1 100644
 --- a/src/responses/compaction.ts
@@ -5583,7 +6018,7 @@ index 2286babd50108ff75954f90108894aeb82d76f26..9dc894b97d1fa860bfe72d2713ddcce9
  const builtinToolSchema = z.object({ type: z.string() }).loose();
  
 diff --git a/src/responses/state.ts b/src/responses/state.ts
-index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6eb833aef 100644
+index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..752374dcf7227baece85fff76348febbd063ad57 100644
 --- a/src/responses/state.ts
 +++ b/src/responses/state.ts
 @@ -5,26 +5,40 @@ import { atomicWriteFile, getConfigDir } from "../config";
@@ -5720,9 +6155,40 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
  let loaded = false;
  let persistTimer: ReturnType<typeof setTimeout> | null = null;
  let pendingPersistPath: string | null = null;
-@@ -69,11 +132,10 @@ function snapshotPath(): string {
+@@ -68,12 +131,41 @@ function snapshotPath(): string {
+   return join(getConfigDir(), "responses-state.json");
  }
  
++/** Validate each ancestry edge once without constructing cumulative histories for every node. */
++function dropInvalidResponseAncestry(): void {
++  const validity = new Map<string, boolean>();
++  for (const id of states.keys()) {
++    if (validity.has(id)) continue;
++    const path: string[] = [];
++    const seen = new Set<string>();
++    let currentId: string | undefined = id;
++    let valid = true;
++    while (currentId) {
++      if (validity.has(currentId)) {
++        valid = validity.get(currentId)!;
++        break;
++      }
++      const state = states.get(currentId);
++      if (!state || seen.has(currentId)) {
++        valid = false;
++        break;
++      }
++      seen.add(currentId);
++      path.push(currentId);
++      currentId = state.parentId;
++    }
++    for (const pathId of path) validity.set(pathId, valid);
++  }
++  for (const [id, valid] of validity) {
++    if (!valid) deleteEntryRaw(id);
++  }
++}
++
  /**
 - * Best-effort disk snapshot so previous_response_id chains survive a proxy restart (the
 - * dominant expansion-miss cause: an in-memory-only store dies with the process, and the next
@@ -5736,7 +6202,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
   */
  function ensureLoaded(): void {
    if (loaded) return;
-@@ -82,25 +144,45 @@ function ensureLoaded(): void {
+@@ -82,25 +174,43 @@ function ensureLoaded(): void {
      const path = snapshotPath();
      if (!existsSync(path)) return;
      const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
@@ -5764,9 +6230,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
      }
 +    // Drop nodes whose persisted ancestry is incomplete or cyclic. Snapshot writing keeps dependency
 +    // closure, so this only protects against hand-edited/corrupt legacy state.
-+    for (const id of [...states.keys()]) {
-+      if (!materializeResponse(id)) deleteEntryRaw(id);
-+    }
++    dropInvalidResponseAncestry();
      pruneResponses();
    } catch {
      /* missing/corrupt snapshot: start empty */
@@ -5785,7 +6249,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
  function persistNow(path: string): void {
    if (persistTimer) {
      clearTimeout(persistTimer);
-@@ -108,26 +190,58 @@ function persistNow(path: string): void {
+@@ -108,26 +218,58 @@ function persistNow(path: string): void {
    }
    pendingPersistPath = null;
    try {
@@ -5860,7 +6324,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
    } catch {
      /* best-effort: disk trouble must never affect request handling */
    }
-@@ -135,8 +249,6 @@ function persistNow(path: string): void {
+@@ -135,8 +277,6 @@ function persistNow(path: string): void {
  
  function schedulePersist(): void {
    if (persistTimer) return;
@@ -5869,7 +6333,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
    pendingPersistPath = snapshotPath();
    const path = pendingPersistPath;
    persistTimer = setTimeout(() => persistNow(path), SNAPSHOT_DEBOUNCE_MS);
-@@ -146,7 +258,6 @@ function schedulePersist(): void {
+@@ -146,7 +286,6 @@ function schedulePersist(): void {
  /** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
  export function flushResponseState(): void {
    if (!persistTimer) return;
@@ -5877,7 +6341,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
    persistNow(pendingPersistPath ?? snapshotPath());
  }
  
-@@ -158,19 +269,18 @@ function inputItems(input: unknown): unknown[] {
+@@ -158,19 +297,18 @@ function inputItems(input: unknown): unknown[] {
  }
  
  function pruneResponses(at = now()): void {
@@ -5901,7 +6365,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
    }
  }
  
-@@ -181,20 +291,20 @@ export function expandPreviousResponseInput(body: unknown): unknown {
+@@ -181,20 +319,20 @@ export function expandPreviousResponseInput(body: unknown): unknown {
    if (!previousId) return body;
    ensureLoaded();
    pruneResponses();
@@ -5925,7 +6389,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
  }
  
  /**
-@@ -208,11 +318,6 @@ export function rememberResponseState(
+@@ -208,11 +346,6 @@ export function rememberResponseState(
  ): void {
    if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
    const request = requestBody as Record<string, unknown>;
@@ -5937,7 +6401,7 @@ index a889c3a8bb5d9aa7b82e582521a959f4537d8fe9..cde11bcf8fff68f7afaca4cd1bfe31a6
    if (request.store === false && !opts?.force) return;
    if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
    if (response.status === "incomplete") {
-@@ -220,11 +325,32 @@ export function rememberResponseState(
+@@ -220,11 +353,32 @@ export function rememberResponseState(
      if (!details || typeof details !== "object" || Array.isArray(details)
        || (details as { reason?: unknown }).reason !== "max_output_tokens") return;
    } else if (response.status !== undefined && response.status !== "completed") return;
@@ -6429,20 +6893,21 @@ index a7ba7b40ea092906ce5a9187eaa82e67738fd807..e4f7db0511ff733948dffa7c5e118503
      { streamPlatform: "darwin", stallTimeoutSec, ...(now ? { now } : {}) },
    );
 diff --git a/tests/browser-worker-contract.test.ts b/tests/browser-worker-contract.test.ts
-index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a5491d02b056 100644
+index 3f3786b0cff009e6d303e62bd1a08e8751828767..307743fe8116c8aa0babb2d93fc1c9cd6a57c8ae 100644
 --- a/tests/browser-worker-contract.test.ts
 +++ b/tests/browser-worker-contract.test.ts
-@@ -1,12 +1,14 @@
+@@ -1,13 +1,15 @@
  import { expect, test } from "bun:test";
 -import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 +import { createServer } from "node:http";
 +import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+ import { EventEmitter } from "node:events";
  import { tmpdir } from "node:os";
  import { join } from "node:path";
  import { createContext, runInContext } from "node:vm";
  import type { Page } from "playwright-core";
 +import type { BrowserTurn } from "../src/adapters/chatgpt-web/browser-worker";
- import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptBrowserWorker, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptConnectorAttachmentMode, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, dismissChatGptTemporaryChatOnboarding, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
+ import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptBrowserWorker, ChatGptSubmissionRejectionObserver, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptConnectorAttachmentMode, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, dismissChatGptTemporaryChatOnboarding, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
 -import { ensureChatGptPersonalizedConnectorAccess, chatGptUnavailableProDetail } from "../src/adapters/chatgpt-web/browser-worker";
 -import { chatGptStoppedThinkingError } from "../src/adapters/chatgpt-web/adapter-error";
 +import { chatGptConnectorMentionQuery, ensureChatGptPersonalizedConnectorAccess, chatGptUnavailableProDetail } from "../src/adapters/chatgpt-web/browser-worker";
@@ -6450,7 +6915,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
  import { CHATGPT_STOPPED_THINKING_LABELS } from "../src/adapters/chatgpt-web/ui-labels";
  import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
  import { CHATGPT_CONNECTOR_NAME, DEV_CHATGPT_CONNECTOR_NAME, defaultChromeExecutable, legacyChatGptConnectorMigrationMessage } from "../src/config";
-@@ -16,8 +18,30 @@ import type { CodexProviderConfig } from "../src/types";
+@@ -17,8 +19,30 @@ import type { CodexProviderConfig } from "../src/types";
  import { compileChatGptWebPrompt, formatChatGptWebMultipartCommit, formatChatGptWebMultipartStage } from "../src/adapters/chatgpt-web/prompt";
  import { estimateCompiledChatGptWebInputTokens } from "../src/adapters/chatgpt-web/input-tokens";
  import { estimateTokens } from "../src/lib/token-estimate";
@@ -6481,7 +6946,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
  function personalizedTemporaryChatRole(
    _role: string,
    options: { name: string | RegExp },
-@@ -304,6 +328,14 @@ test("browser configuration rejects the retired connector identity before openin
+@@ -305,6 +329,14 @@ test("browser configuration rejects the retired connector identity before openin
    })).toThrow(/requires a newly created connector named "Codex Native2".*do not rename or refresh/s);
  });
  
@@ -6496,7 +6961,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
  test("connector verification reports a legacy-only ChatGPT menu as a migration error", async () => {
    const connectorMentionFailure = (ChatGptBrowserWorker.prototype as unknown as {
      connectorMentionFailure(menuRows: unknown, triggerAttempts: number): Promise<string>;
-@@ -1308,7 +1340,7 @@ test("connector selection re-resolves the active composer after ChatGPT replaces
+@@ -1309,7 +1341,7 @@ test("connector selection re-resolves the active composer after ChatGPT replaces
      ["fill", ""],
      ["fill", ""],
      ["focus"],
@@ -6505,7 +6970,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
      ["waitForResult"],
      ["press"],
      ["waitForSelectedConnector"],
-@@ -1414,7 +1446,7 @@ test("connector selection retriggers the complete mention after a fresh-page hyd
+@@ -1415,7 +1447,7 @@ test("connector selection retriggers the complete mention after a fresh-page hyd
      fill: async () => { calls.push("clear"); },
      focus: async (_options?: { signal?: AbortSignal }) => { calls.push("focus"); },
      pressSequentially: async (value: string) => {
@@ -6514,7 +6979,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
        calls.push("type");
      },
      press: async (key: string) => {
-@@ -1695,7 +1727,7 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact
+@@ -1696,7 +1728,7 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact
    const timeout = new Error("menu timeout");
    timeout.name = "TimeoutError";
    const realDateNow = Date.now;
@@ -6523,7 +6988,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
      let now = realDateNow();
      const page = {
        getByRole: personalizedTemporaryChatRole,
-@@ -1730,13 +1762,19 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact
+@@ -1731,13 +1763,19 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact
                ? legacyChatGptConnectorMigrationMessage("Codex Native")
                : `exact row was not visible after ${attempts}`
          ),
@@ -6545,7 +7010,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
    if (!(missingMenuError instanceof Error)) {
      throw new Error("Expected connector selection to fail with an Error");
    }
-@@ -1752,6 +1790,180 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact
+@@ -1753,6 +1791,180 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact
    await expect(run([CHATGPT_CONNECTOR_NAME])).rejects.toThrow("exact row was not visible");
  });
  
@@ -6726,7 +7191,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
  test("tool-capable prompts use the shared Playwright connector selection before inserting context", async () => {
    const controller = new AbortController();
    const calls: Array<[string, string?]> = [];
-@@ -1848,7 +2060,7 @@ test("tool-capable prompts use the shared Playwright connector selection before
+@@ -1849,7 +2061,7 @@ test("tool-capable prompts use the shared Playwright connector selection before
      ["fill", ""],
      ["fill", ""],
      ["focus"],
@@ -6735,7 +7200,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
      ["connectorMenu"],
      ["selectConnector"],
      ["selectedConnector"],
-@@ -2168,7 +2380,7 @@ test("an abort while inserting a connector prompt clears the selected pill and p
+@@ -2169,7 +2381,7 @@ test("an abort while inserting a connector prompt clears the selected pill and p
    expect(connectorSelected).toBeFalse();
  });
  
@@ -6744,7 +7209,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
    const attachPrompt = (ChatGptBrowserWorker.prototype as unknown as {
      attachPrompt(
        page: unknown,
-@@ -2189,6 +2401,7 @@ test("retained tool turns insert into the connector-bound composer without selec
+@@ -2190,6 +2402,7 @@ test("retained tool turns insert into the connector-bound composer without selec
    };
    await attachPrompt.call({
      activeComposer: async () => composer,
@@ -6752,7 +7217,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
      selectConnector: async () => { throw new Error("retained connector must not be selected again"); },
      insertPromptText: async (_page: unknown, text: string) => { expect(text).toBe("retained context"); calls.push("insert"); },
      assertPromptAttached: async () => { calls.push("assert"); },
-@@ -2196,6 +2409,46 @@ test("retained tool turns insert into the connector-bound composer without selec
+@@ -2197,6 +2410,46 @@ test("retained tool turns insert into the connector-bound composer without selec
    expect(calls).toEqual(["fill", "focus", "insert", "assert"]);
  });
  
@@ -6799,7 +7264,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
  test("image attachment readiness uses exact file tiles and not localized remove-button text", async () => {
    const imageUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
    const calls: Array<[string, string?]> = [];
-@@ -2379,24 +2632,26 @@ test("Think attachment runs after fresh connector selection and rechecks retaine
+@@ -2380,24 +2633,26 @@ test("Think attachment runs after fresh connector selection and rechecks retaine
    const attach = (ChatGptBrowserWorker.prototype as unknown as { attachPrompt: (...args: unknown[]) => Promise<void> }).attachPrompt;
    for (const [localTools, retained] of [[true, false], [true, true], [false, false]]) {
      const ui = thinkSlashFixture();
@@ -6829,13 +7294,10 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
      }
    }
  });
-@@ -3094,7 +3349,60 @@ test("Bigger Context fits mixed-density whole records within both token and comp
-       { stagingEffort: stagingMode.effort, maxStageMessageTokens, maxStageChars, finalMessageTokens, finalMessageChars: final.length },
-     )).not.toThrow();
+@@ -3169,6 +3424,59 @@ test("Bigger Context fits mixed-density whole records within both token and comp
    }
--}, 30_000);
-+}, 90_000);
-+
+ }, 90_000);
+ 
 +test("Bigger Context fragments one oversized Codex record before the 81,807-token final-part boundary", () => {
 +  const capabilities = { localToolsEnabled: false, solAvailable: true, extraHighAvailable: false, proAvailable: false, experimentalBiggerContext: true };
 +  const content = "a!b@c#d$e%f^g&h*".repeat(7_000);
@@ -6846,7 +7308,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
 +    options: { reasoning: "high" },
 +    _compactionRequest: true,
 +    context: { systemPrompt: [], messages: [{ role: "user", content, timestamp: 1 }] },
-+  }, capabilities, undefined, { experimentalMultipartParts: 3 });
++  }, capabilities, undefined, { experimentalMultipartParts: 6 });
 +  const multipart = compiled.multipart!;
 +  const records = multipart.parts.flatMap(part => JSON.parse(part).records) as Array<{
 +    kind: string;
@@ -6871,7 +7333,7 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
 +
 +  const transaction = "ctx_0123456789abcdef0123456789abcdef";
 +  const stages = multipart.parts.slice(0, -1).map((payload, index) => (
-+    formatChatGptWebMultipartStage(payload, transaction, index + 1, 3).text
++    formatChatGptWebMultipartStage(payload, transaction, index + 1, 6).text
 +  ));
 +  const final = formatChatGptWebMultipartCommit(multipart, transaction);
 +  const maxStageMessageTokens = Math.max(...stages.map(text => estimateTokens(text)));
@@ -6884,15 +7346,16 @@ index 0dc283557303349b53f8b9ace183bd27974be55d..b08c685e2d42fb9efc6989e3efa6a549
 +    estimateCompiledChatGptWebInputTokens(compiled, CHATGPT_WEB_MODEL_ID),
 +    Math.max(maxStageMessageTokens, finalMessageTokens),
 +    CHATGPT_WEB_MODEL_ID, "high", capabilities,
-+    Math.max(maxStageChars, final.length), 3,
++    Math.max(maxStageChars, final.length), 6,
 +    { stagingEffort: stagingMode.effort, maxStageMessageTokens, maxStageChars, finalMessageTokens, finalMessageChars: final.length },
 +  )).not.toThrow();
 +}, 20_000);
- 
++
  test("Bigger Context preflight expands only the total context ceiling and keeps each message boundary", () => {
    const plus = {
+     localToolsEnabled: false,
 diff --git a/tests/chatgpt-web-harness.test.ts b/tests/chatgpt-web-harness.test.ts
-index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa427e073fea 100644
+index 5782d4c3617d0b9890f87d8faaba307e1bc965ca..629cdb8b65da39b2fa08bd92c61a4447511e1b85 100644
 --- a/tests/chatgpt-web-harness.test.ts
 +++ b/tests/chatgpt-web-harness.test.ts
 @@ -10,6 +10,7 @@ import { ChatGptWebAdapterError, chatGptStoppedThinkingError } from "../src/adap
@@ -6937,7 +7400,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      emitText,
      ignoreOutput,
      ignoreOutput,
-@@ -1510,7 +1521,7 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -1511,7 +1522,7 @@ describe("ChatGPT outer-native harness v4", () => {
      expect(serialized).toContain("current request");
    });
  
@@ -6946,7 +7409,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      const imageUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAE0lEQVR4nGP4z8DwHwwZGP6DAQBJyAn3FGMynQAAAABJRU5ErkJggg==";
      const request = parsed();
      request.context.systemPrompt = ["d".repeat(70_000)];
-@@ -1521,8 +1532,11 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -1522,8 +1533,11 @@ describe("ChatGPT outer-native harness v4", () => {
      const compiled = compileChatGptWebPrompt(request, toolCapabilities, "turn_123456789012345678901234");
      const files = chatGptPromptFilePayloads(compiled);
  
@@ -6960,35 +7423,8 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      expect(files.map(file => file.name)).toEqual(["codex-input-image-1.png"]);
      expect(files[0]!.mimeType).toBe("image/png");
    });
-@@ -2129,18 +2143,71 @@ describe("ChatGPT outer-native harness v4", () => {
-       bindingId: claimed.bindingId,
-       wireName: "exec_command",
-       freeform: false,
-+      descriptor: {
-+        wireName: "exec_command",
-+        name: "exec_command",
-+        description: "Execute command",
-+        kind: "function",
-+        parameters: { type: "object", properties: { cmd: { type: "string" } } },
-+      },
-       arguments: { cmd },
-     }, 10_000);
-     const first = invoke("pwd");
-     const second = invoke("git status --short");
-     const batch = await broker.nextToolBatch(token);
-     expect(batch.map(request => request.arguments?.cmd).sort()).toEqual(["git status --short", "pwd"]);
--    expect(await broker.nextToolBatch(token)).toEqual(batch);
-+    expect(batch.every(request => Object.isFrozen(request))).toBe(true);
-+    expect(batch.every(request => Object.isFrozen(request.arguments))).toBe(true);
-+    expect(batch.every(request => Object.isFrozen(request.descriptor))).toBe(true);
-+    expect(batch.every(request => Object.isFrozen(request.descriptor?.parameters))).toBe(true);
-+    expect(batch.every(request => Object.isFrozen(request.descriptor?.parameters.properties))).toBe(true);
-+    const redelivered = await broker.nextToolBatch(token);
-+    expect(redelivered.map(request => request.callId)).toEqual(batch.map(request => request.callId));
-+    expect(redelivered).toEqual(batch);
-     for (const request of batch) broker.completeTool(token, request.callId, toolResult({ output: request.arguments?.cmd }));
-     await Promise.all([first, second]);
-     await broker.close();
+@@ -2164,6 +2178,45 @@ describe("ChatGPT outer-native harness v4", () => {
+     }
    });
  
 +  test("rejects broker descriptor identity and kind mismatches before native delivery", async () => {
@@ -7033,7 +7469,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
    test("revoking a turn rejects pending invocations and invalidates its binding", async () => {
      const socketPath = brokerTestEndpoint(`cgw-h3-revoke-${process.pid}-${Date.now()}`);
      const broker = TurnBroker.forSocket(socketPath);
-@@ -2254,7 +2321,7 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -2277,7 +2330,7 @@ describe("ChatGPT outer-native harness v4", () => {
      }
    });
  
@@ -7042,7 +7478,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      const socketPath = brokerTestEndpoint(`cgw-h3-adapter-${process.pid}-${Date.now()}`);
      const provider: CodexProviderConfig = {
        adapter: "chatgpt-web",
-@@ -2283,17 +2350,19 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -2306,17 +2359,19 @@ describe("ChatGPT outer-native harness v4", () => {
          retainedCompactionMessages += 1;
          const prepared = await turn.prepareResume!();
          try {
@@ -7072,7 +7508,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
          } finally {
            prepared.release();
          }
-@@ -2753,7 +2822,7 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -2780,7 +2835,7 @@ describe("ChatGPT outer-native harness v4", () => {
        const inventoryThroughGateway = async (
          query: string,
          includeSchema: boolean,
@@ -7081,7 +7517,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
        ) => {
          const pending = call("codex_tool_inventory", {
            turn_token: token,
-@@ -2763,7 +2832,7 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -2790,7 +2845,7 @@ describe("ChatGPT outer-native harness v4", () => {
          const [request] = await broker.nextToolBatch(token);
          expect(request).toMatchObject({ wireName: "exec", freeform: true });
          const gatewayCalls: GatewayProgramCall[] = [];
@@ -7090,8 +7526,8 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
          expect(gatewayCalls).toEqual([]);
          broker.completeTool(token, request!.callId, { content });
          return await pending;
-@@ -2782,6 +2851,36 @@ describe("ChatGPT outer-native harness v4", () => {
-         next_offset: null,
+@@ -2813,6 +2868,36 @@ describe("ChatGPT outer-native harness v4", () => {
+         }],
        });
  
 +      const richGatewayInventory = await inventoryThroughGateway(
@@ -7124,10 +7560,10 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
 +        next_offset: null,
 +      });
 +
-       const rawGatewayInventory = await inventoryThroughGateway(
-         "Run nested Codex tools",
-         false,
-@@ -2880,9 +2979,10 @@ describe("ChatGPT outer-native harness v4", () => {
+       const search = call("codex_tool_call", {
+         turn_token: token, wire_name: "tool_search", arguments: { query: "clink opencode pal" },
+       });
+@@ -2920,9 +3005,10 @@ describe("ChatGPT outer-native harness v4", () => {
            namespace: null,
            kind: "gateway",
            description: "web__run test tool",
@@ -7139,7 +7575,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
  
        const nestedWeb = call("codex_tool_call", {
          turn_token: token,
-@@ -3046,6 +3146,24 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -3086,6 +3172,24 @@ describe("ChatGPT outer-native harness v4", () => {
        { name: "write_stdin", description: "Continue a command", parameters: { type: "object" } },
        { name: "apply_patch", description: "Apply a patch", parameters: {}, freeform: true },
        { name: "view_image", description: "View an image", parameters: { type: "object" } },
@@ -7164,7 +7600,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      ];
      const token = await broker.register(directEnvironment, 60_000);
      const transport = new StdioClientTransport({
-@@ -3074,6 +3192,65 @@ describe("ChatGPT outer-native harness v4", () => {
+@@ -3114,6 +3218,65 @@ describe("ChatGPT outer-native harness v4", () => {
        // does not enqueue an outer Codex tool call.
        expect(broker.beginCompletionFence(token)).toBe(2);
  
@@ -7230,7 +7666,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
        const exec = call("codex_exec", {
          turn_token: token,
          cmd: "pwd",
-@@ -3792,13 +3969,13 @@ describe("adapter liveness covers every path through a turn", () => {
+@@ -3832,13 +3995,13 @@ describe("adapter liveness covers every path through a turn", () => {
      return request;
    }
  
@@ -7246,7 +7682,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
    ): Promise<number[]> {
      const provider: CodexProviderConfig = {
        adapter: "chatgpt-web",
-@@ -3807,7 +3984,23 @@ describe("adapter liveness covers every path through a turn", () => {
+@@ -3847,7 +4010,23 @@ describe("adapter liveness covers every path through a turn", () => {
      };
      const worker = ChatGptBrowserWorker.forProvider(provider);
      const originalRun = worker.run.bind(worker);
@@ -7271,7 +7707,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      try {
        const run = async (
          request: CodexParsedRequest,
-@@ -3816,11 +4009,13 @@ describe("adapter liveness covers every path through a turn", () => {
+@@ -3856,11 +4035,13 @@ describe("adapter liveness covers every path through a turn", () => {
        ) => {
          await createChatGptWebAdapter(provider).runTurn!(request, { headers: new Headers(), abortSignal: signal }, emit);
        };
@@ -7288,7 +7724,7 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
        (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
      }
    }
-@@ -3914,7 +4109,17 @@ describe("adapter liveness covers every path through a turn", () => {
+@@ -3954,7 +4135,17 @@ describe("adapter liveness covers every path through a turn", () => {
            event => { if (event.type === "heartbeat") beats.push(Date.now() - started); },
            abort.signal,
          ).catch(() => {});
@@ -7308,18 +7744,45 @@ index dd299a9508fa151cc9bcf4f1e584bd6f7f749e56..8e5e51ad23ea1f7b5872e5eccdfaaa42
      );
  
 diff --git a/tests/chatgpt-web-usage.test.ts b/tests/chatgpt-web-usage.test.ts
-index fce0c7a0f8fb06a20d2a4c994590457a2df8df5c..0150851a196cce3dc787184188b5db30440601ee 100644
+index baa3afa56f3ba0bd13019d47bfe1396744cd0db4..511fa507fc0e34c4a1d3770cf8c54185f5069ff2 100644
 --- a/tests/chatgpt-web-usage.test.ts
 +++ b/tests/chatgpt-web-usage.test.ts
-@@ -43,15 +43,22 @@ test("multipart selection accounts for whole-record and composer fit before subm
+@@ -43,27 +43,45 @@ test("multipart selection accounts for whole-record and composer fit before subm
    }
+   // Low-token text can still exceed the reasoning model's server character ceiling.
+   // Stage the complete record instead of sending it inline or dropping its contents.
+-  const sparsePro = request("x".repeat(600_000));
++  const sparseText = "x".repeat(600_000);
++  const sparsePro = request(sparseText);
+   expect(resolveBiggerContextMultipartParts(sparsePro, capabilities)).toBe(2);
+   const stagedPro = compileChatGptWebPrompt(sparsePro, capabilities, undefined, { experimentalMultipartParts: 2 });
+-  expect(stagedPro.multipart!.parts.flatMap(part => JSON.parse(part).records).map(record => record.message.content))
+-    .toEqual([sparsePro.context.messages[0]!.content]);
++  const sparseRecords = stagedPro.multipart!.parts.flatMap(part => JSON.parse(part).records) as Array<{
++    kind: string;
++    fragment_index?: number;
++    data?: string;
++  }>;
++  const sparseFragments = sparseRecords.filter(record => record.kind === "record_fragment");
++  expect(sparseFragments.length).toBeGreaterThan(1);
++  const reconstructed = JSON.parse(sparseFragments
++    .sort((left, right) => left.fragment_index! - right.fragment_index!)
++    .map(record => record.data)
++    .join("")) as { message: { content: string } };
++  expect(reconstructed.message.content).toBe(sparseText);
+   const proMessages = compiledChatGptWebMessages(stagedPro);
+   expect(proMessages[1]!.length).toBeLessThanOrEqual(500_000);
+   expect(resolveChatGptWebMultipartStagingMode(
+     "gpt-5.6-sol", capabilities, estimateTokens(proMessages[0]!), proMessages[0]!.length,
+-  ).effort).toBe("max");
++  ).effort).toBe("low");
  }, 60_000);
  
--test("Bigger Context compaction selects three parts before the legacy inline byte budget", () => {
+-test("Bigger Context compaction selects six parts before the legacy inline byte budget", () => {
 -  const parsed = request("x".repeat(160_000));
 -  parsed._compactionRequest = true;
 -  const parts = resolveBiggerContextMultipartParts(parsed, capabilities);
--  expect(parts).toBe(3);
+-  expect(parts).toBe(6);
 -  const compiled = compileChatGptWebPrompt(parsed, capabilities, undefined, { experimentalMultipartParts: parts });
 +test("Bigger Context compaction selects the cheapest transport that fits", () => {
 +  const inline = request("small compaction");
@@ -7330,10 +7793,10 @@ index fce0c7a0f8fb06a20d2a4c994590457a2df8df5c..0150851a196cce3dc787184188b5db30
 +  twoPart._compactionRequest = true;
 +  expect(resolveBiggerContextMultipartParts(twoPart, capabilities)).toBe(2);
 +
-+  const threePart = request("word ".repeat(220_000));
-+  threePart._compactionRequest = true;
-+  expect(resolveBiggerContextMultipartParts(threePart, capabilities)).toBe(3);
-+  const compiled = compileChatGptWebPrompt(threePart, capabilities, undefined, { experimentalMultipartParts: 3 });
++  const sixPart = request("word ".repeat(220_000));
++  sixPart._compactionRequest = true;
++  expect(resolveBiggerContextMultipartParts(sixPart, capabilities)).toBe(6);
++  const compiled = compileChatGptWebPrompt(sixPart, capabilities, undefined, { experimentalMultipartParts: 6 });
    expect(compiled.trimmedCompactionMessages).toBeUndefined();
 -  expect(compiled.multipart!.parts.flatMap(part => JSON.parse(part).records).map(record => record.message.content))
 -    .toEqual([parsed.context.messages[0]!.content]);
@@ -7636,10 +8099,10 @@ index 7e65a195deb2ab2afaab28f4a54b7b5443851c4d..4c5233e2897e38782083bd776230418a
    } finally {
      await transport?.close();
 diff --git a/tests/launcher-helper-client.test.ts b/tests/launcher-helper-client.test.ts
-index 60220e25b4311afe6301bdb29a6f0ac5b4448455..9712526f9ca25ec8f157fdeb85a8dd4abeaac40c 100644
+index 2ccf6fee22a1f70bb1d794f86394e3f830c9e285..603dcd85e79d9646be4e2a124698859769b6598b 100644
 --- a/tests/launcher-helper-client.test.ts
 +++ b/tests/launcher-helper-client.test.ts
-@@ -349,6 +349,109 @@ test("an abort dispatched during run submission cannot overtake the run frame",
+@@ -350,6 +350,138 @@ test("an abort dispatched during run submission cannot overtake the run frame",
    expect(released).toBe(false);
  });
  
@@ -7744,6 +8207,35 @@ index 60220e25b4311afe6301bdb29a6f0ac5b4448455..9712526f9ca25ec8f157fdeb85a8dd4a
 +    onTextDelta() {},
 +  })).rejects.toThrow("ambiguous helper pipe write");
 +  expect(terminated).toBe(1);
++});
++
++test("a replacement helper waits for the previous helper epoch to finish terminating", async () => {
++  const client = new LauncherBrowserHelperClient({
++    appName: "Codex Native",
++    browserHost: "launcher",
++    browserHostDescriptorPath: "/durable/missing-launcher.json",
++    storageStatePath: "/durable/unused-state.json",
++    chromeExecutablePath: "/durable/unused-chrome",
++    turnTimeoutMs: 60_000,
++    headed: true,
++    autoApproveToolCalls: false,
++  });
++  let release!: () => void;
++  const internal = client as unknown as { terminatingPromise?: Promise<void> };
++  internal.terminatingPromise = new Promise<void>(resolve => { release = resolve; });
++  let settled = false;
++  const result = client.run({
++    traceId: "replacement-barrier-123",
++    modelId: "gpt-5.6-sol",
++    reasoning: "high",
++    capabilities: { localToolsEnabled: false, solAvailable: true, extraHighAvailable: false, proAvailable: false },
++    prepare: async () => ({ text: "inspect", images: [], release() {} }),
++    onTextDelta() {},
++  }).finally(() => { settled = true; });
++  await Bun.sleep(10);
++  expect(settled).toBe(false);
++  release();
++  await expect(result).rejects.toThrow();
 +});
 +
  test("structured helper errors preserve the ChatGPT adapter failure contract", async () => {
@@ -7899,6 +8391,54 @@ index 0000000000000000000000000000000000000000..74fddc4f208d4b0768ede269afd37d5d
 +    await TurnBroker.forSocket(socketPath).close();
 +  }
 +}, 30_000);
+diff --git a/tests/mcp-context-chunks.test.ts b/tests/mcp-context-chunks.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0f7347f8879ae0b195e70e9bb1dd48416546107f
+--- /dev/null
++++ b/tests/mcp-context-chunks.test.ts
+@@ -0,0 +1,42 @@
++import { expect, test } from "bun:test";
++import { createHash } from "node:crypto";
++import {
++  CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS,
++  assertChatGptWebMcpContextTransport,
++  chatGptWebMcpContextChunk,
++  chatGptWebMcpContextChunks,
++  createChatGptWebMcpContextTransport,
++} from "../src/adapters/chatgpt-web/context-transport";
++
++test("repeated context reads preserve Unicode, hashes, and private chunk storage", () => {
++  const text = "a".repeat(CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS - 1) + "😀" + "β".repeat(70_000);
++  const context = assertChatGptWebMcpContextTransport(createChatGptWebMcpContextTransport(text));
++  const chunks = chatGptWebMcpContextChunks(context);
++  expect(Object.isFrozen(context)).toBe(true);
++  expect(chunks[0]!.length).toBe(CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS - 1);
++  expect(chunks[1]!.startsWith("😀")).toBe(true);
++  expect(chunks.join("")).toBe(text);
++  expect(createHash("sha256").update(chunks.join(""), "utf8").digest("hex")).toBe(context.sha256);
++  const expected = [...chunks];
++  chunks[0] = "caller mutation";
++  chunks.push("extra chunk");
++  for (const index of [2, 0, 1, 2, 3, 0]) {
++    expect(chatGptWebMcpContextChunk(context, context.contextId, index)).toMatchObject({
++      text: expected[index],
++      total_chunks: expected.length,
++      next_chunk: index + 1 < expected.length ? index + 1 : null,
++    });
++  }
++  expect(chatGptWebMcpContextChunks(context)).toEqual(expected);
++  expect(() => chatGptWebMcpContextChunk(context, "wrong-context", 0)).toThrow("context id");
++  for (const index of [-1, 0.5, expected.length]) {
++    expect(() => chatGptWebMcpContextChunk(context, context.contextId, index)).toThrow("chunk");
++  }
++});
++
++test("mutable transport copies do not receive stale cached chunks", () => {
++  const context = { ...createChatGptWebMcpContextTransport("before") };
++  expect(chatGptWebMcpContextChunks(context)).toEqual(["before"]);
++  Object.assign(context, createChatGptWebMcpContextTransport("after"));
++  expect(chatGptWebMcpContextChunk(context, context.contextId, 0).text).toBe("after");
++});
 diff --git a/tests/mcp-context-read-safety.test.ts b/tests/mcp-context-read-safety.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..8f55314c156b8a052c901db60e8c7097afa7a327
@@ -8017,7 +8557,7 @@ index 0000000000000000000000000000000000000000..8f55314c156b8a052c901db60e8c7097
 +}, 30_000);
 diff --git a/tests/mcp-context-transport.test.ts b/tests/mcp-context-transport.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7dc3799d18164326b135064cfdb696dbae2b82a3
+index 0000000000000000000000000000000000000000..ac9210394f3d273362b9d2490d17c4ba9a636fbd
 --- /dev/null
 +++ b/tests/mcp-context-transport.test.ts
 @@ -0,0 +1,269 @@
@@ -8127,7 +8667,7 @@ index 0000000000000000000000000000000000000000..7dc3799d18164326b135064cfdb696db
 +    compact,
 +    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
 +    token,
-+    { experimentalMultipartParts: 3 },
++    { experimentalMultipartParts: 6 },
 +  );
 +
 +  expect(compiled.contextTransport).toBeDefined();
@@ -8316,6 +8856,21 @@ index 521178d312d545dee2c40178e3e0bb46c317cd05..dd0c2a1bae1d9eb48b438d8908f8cd90
    test("owns only its namespace, is idempotent, and omits Pro-only modes when unavailable", () => {
      const config = defaultConfig("browser-only");
      config.subagentProtocol = "native";
+diff --git a/tests/native-network.test.ts b/tests/native-network.test.ts
+index 51fbcf63c1ff2393e02e6b39e2dd54975a02c677..789d2eaaf7e4fe0a2fd0b5d9e0ad24ffc90d08e9 100644
+--- a/tests/native-network.test.ts
++++ b/tests/native-network.test.ts
+@@ -91,6 +91,10 @@ test("native fetch reaches a proxy-only target, refreshes routing, and never ret
+     expect(childOutput).toContain("[DONE]");
+     expect(controlCalls).toBe(5);
+     expect(calls).toHaveLength(2);
++    process.env.NO_PROXY = "native-proxy-regression.invalid";
++    await expect(fetchNativeCodex(request())).rejects.toThrow();
++    expect(controlCalls).toBe(5);
++    delete process.env.NO_PROXY;
+     delete process.env.CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR;
+     await expect(fetchNativeCodex(request())).rejects.toThrow();
+     expect(controlCalls).toBe(5);
 diff --git a/tests/personalization-connector-preflight.test.ts b/tests/personalization-connector-preflight.test.ts
 index 67bf183ff5cd47bc876e71fc066e62c8511c05b2..ff57226fee85ee052b2b24877bd6fbc72a2f841e 100644
 --- a/tests/personalization-connector-preflight.test.ts
@@ -8373,7 +8928,7 @@ index 67bf183ff5cd47bc876e71fc066e62c8511c05b2..ff57226fee85ee052b2b24877bd6fbc7
    let connectorCatalogAvailable = false;
    let menuOpen = false;
 diff --git a/tests/prompt-contract.test.ts b/tests/prompt-contract.test.ts
-index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e9646cc002e 100644
+index 39cbff2574305be1c673c5b088df909af614163c..c3c23b1b92bd777b33d6b16dfb91f420265a03b8 100644
 --- a/tests/prompt-contract.test.ts
 +++ b/tests/prompt-contract.test.ts
 @@ -10,8 +10,8 @@ import {
@@ -8407,8 +8962,8 @@ index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e96
    expect(compiled.text).toContain("The missing local-computer bridge says nothing about whether those ChatGPT capabilities are available");
    expect(compiled.text).not.toContain("No local computer tool, MCP app");
    expect(compiled.text).not.toContain("evidence inside");
-@@ -131,7 +138,7 @@ test("Bigger Context sends three semantic record envelopes and starts work from
-   expect(compiled.multipart?.parts).toHaveLength(3);
+@@ -131,7 +138,7 @@ test("Bigger Context sends six semantic record envelopes and starts work from th
+   expect(compiled.multipart?.parts).toHaveLength(6);
    const records = compiled.multipart!.parts.flatMap(part => {
      const payload = JSON.parse(part) as { version: number; records: unknown[] };
 -    expect(payload.version).toBe(1);
@@ -8433,17 +8988,15 @@ index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e96
    expect(compiled.text).not.toContain("codex_bind_turn");
    expect(compiled.text).not.toContain("web search, browsing, research");
    expect(compiled.text).not.toContain("missing local-computer bridge");
-@@ -352,8 +362,55 @@ test("Bigger Context compaction preserves history above the retired inline byte
-   for (let index = 1; index <= 6; index += 1) {
-     expect(staged).toContain(`multipart-history-${index}-`);
+@@ -354,6 +364,53 @@ test("Bigger Context compaction preserves history above the retired inline byte
    }
-+}, 30_000);
-+
-+test("Bigger Context compaction trims oldest expendable history when all three parts would overflow", () => {
+ }, 30_000);
+ 
++test("Bigger Context compaction trims oldest expendable history when all six parts would overflow", () => {
 +  const compact = request("high");
 +  compact._compactionRequest = true;
 +  compact.context.systemPrompt = [];
-+  const dense = (label: string) => `${label}-${"a!b@c#d$e%f^g&h*".repeat(5_500)}`;
++  const dense = (label: string) => `${label}-${"a!b@c#d$e%f^g&h*".repeat(20_000)}`;
 +  compact.context.messages = [
 +    { role: "developer", content: dense("discard-oldest"), timestamp: 1 },
 +    { role: "user", content: dense("keep-history-one"), timestamp: 2 },
@@ -8466,15 +9019,15 @@ index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e96
 +  expect(staged).toContain("checkpoint-now");
 +  expect(multipart.multipart!.commit).toContain("2 older history item(s) omitted");
 +  expect(multipart.multipart!.commit).toContain("supplied history is incomplete");
- });
- 
-+test("Bigger Context compaction fails closed when the final atomic instruction exceeds all three parts", () => {
++});
++
++test("Bigger Context compaction fails closed when the final instruction exceeds all six parts", () => {
 +  const compact = request("high");
 +  compact._compactionRequest = true;
 +  compact.context.systemPrompt = [];
 +  compact.context.messages = [{
 +    role: "user",
-+    content: "a!b@c#d$e%f^g&h*".repeat(20_000),
++    content: "a!b@c#d$e%f^g&h*".repeat(40_000),
 +    timestamp: 1,
 +  }];
 +
@@ -8489,7 +9042,7 @@ index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e96
  test("Bigger Context minimizes the largest ordered stage instead of overfilling a middle part", () => {
    const compact = request("high");
    compact._compactionRequest = true;
-@@ -619,7 +676,7 @@ test("uses the public Instant name without leaking the browser menu alias into t
+@@ -620,7 +677,7 @@ test("uses the public Instant name without leaking the browser menu alias into t
    expect(compiled.text).not.toContain("Instant 5.5");
  });
  
@@ -8498,7 +9051,7 @@ index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e96
    const token = "turn_12345678901234567890123456789012";
    const largeContent = "x".repeat(600_000);
    const large = request("high");
-@@ -637,11 +694,14 @@ test("keeps large contexts intact in the inline text envelope", () => {
+@@ -638,11 +695,14 @@ test("keeps large contexts intact in the inline text envelope", () => {
      token,
    );
  
@@ -8520,10 +9073,10 @@ index 017fe529ab2523cb4ccccb7b9af2a4a6bf501837..eb627cf5a5e0876a87e4c54964694e96
  });
 diff --git a/tests/response-state.test.ts b/tests/response-state.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..061b878e93f5758e0ecd66972d9373f1855df973
+index 0000000000000000000000000000000000000000..4a70ddbcf60f2f653af6d9988373a5c9ee44c730
 --- /dev/null
 +++ b/tests/response-state.test.ts
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,186 @@
 +import { expect, test } from "bun:test";
 +import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 +import { join } from "node:path";
@@ -8543,6 +9096,42 @@ index 0000000000000000000000000000000000000000..061b878e93f5758e0ecd66972d9373f1
 +  process.env.CODEX_CHATGPT_WEB_HOME = home;
 +  return import(`../src/responses/state.ts?state-test=${crypto.randomUUID()}`);
 +}
++
++test("snapshot ancestry rejects cycles and missing parents without losing reverse-ordered branches", async () => {
++  const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
++  const home = mkdtempSync(join(tmpdir(), "webgpt-response-state-ancestry-"));
++  try {
++    const node = (id: string, parentId?: string) => [id, {
++      createdAt: Date.now(), items: [user(id)], ...(parentId ? { parentId } : {}),
++    }];
++    writeFileSync(join(home, "responses-state.json"), JSON.stringify({
++      version: 2,
++      states: [
++        node("leaf", "branch"), node("sibling", "root"), node("branch", "root"), node("root"),
++        node("orphan-child", "orphan"), node("orphan", "absent"),
++        node("cycle-child", "cycle-a"), node("cycle-a", "cycle-b"), node("cycle-b", "cycle-a"),
++        node("self", "self"),
++      ],
++    }));
++    const state = await loadState(home);
++    for (const [id, history] of [
++      ["leaf", ["root", "branch", "leaf"]], ["sibling", ["root", "sibling"]],
++    ] as const) {
++      const replay = state.expandPreviousResponseInput({
++        model, previous_response_id: id, input: [user("tail")],
++      }) as { input: unknown[] };
++      expect(replay.input).toEqual([...history.map(user), user("tail")]);
++    }
++    for (const id of ["orphan-child", "orphan", "cycle-child", "cycle-a", "cycle-b", "self"]) {
++      const request = { model, previous_response_id: id, input: [user("tail")] };
++      expect(state.expandPreviousResponseInput(request)).toBe(request);
++    }
++  } finally {
++    if (previousHome === undefined) delete process.env.CODEX_CHATGPT_WEB_HOME;
++    else process.env.CODEX_CHATGPT_WEB_HOME = previousHome;
++    rmSync(home, { recursive: true, force: true });
++  }
++});
 +
 +test("previous-response state uses structural sharing and survives restart", async () => {
 +  const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
@@ -8903,18 +9492,9 @@ index ba97f57759a87307b1df7426740870d96b2f34f3..198dff67df52889a3975be09f409aaae
 +  }));
 +});
 diff --git a/tests/retained-compaction.test.ts b/tests/retained-compaction.test.ts
-index e937c62e6f97bbf6541bc7cae5f577c3ffb6da1c..2d1df20924e990e923ffc259f01ec37f97fd3fab 100644
+index fce88ca6e9e086fe421ac0c4eb2e091eca302eb0..d976fd8a348aee34ac1c3668e7647203f9eceda8 100644
 --- a/tests/retained-compaction.test.ts
 +++ b/tests/retained-compaction.test.ts
-@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
- import { join } from "node:path";
- import type { BrowserTurn } from "../src/adapters/chatgpt-web/browser-worker";
- import { ChatGptBrowserWorker } from "../src/adapters/chatgpt-web/browser-worker";
--import { ChatGptCompactionHandoffAccepted, chatGptRetainedConversationUnavailableError } from "../src/adapters/chatgpt-web/adapter-error";
-+import { ChatGptWebAdapterError, chatGptRetainedConversationUnavailableError } from "../src/adapters/chatgpt-web/adapter-error";
- import {
-   MAX_COMPACTION_HANDOFF_TIMEOUT_MS,
-   cancelAllStructuredCompactions,
 @@ -44,6 +44,8 @@ import {
  import { defaultBrokerEndpoint } from "../src/config";
  import {
@@ -9170,7 +9750,7 @@ index e937c62e6f97bbf6541bc7cae5f577c3ffb6da1c..2d1df20924e990e923ffc259f01ec37f
      expect(contextText).toContain("Original task");
      expect(contextText).toContain("Continue with the next step");
      if (experimentalBiggerContext) {
--      expect(prepared.multipart!.parts).toHaveLength(3);
+-      expect(prepared.multipart!.parts).toHaveLength(6);
 +      expect(prepared.multipart!.parts).toHaveLength(2);
        expect(prepared.trimmedCompactionMessages).toBeUndefined();
        const lastRecord = prepared.multipart!.parts.flatMap(part => JSON.parse(part).records).at(-1);
@@ -9252,7 +9832,17 @@ index e937c62e6f97bbf6541bc7cae5f577c3ffb6da1c..2d1df20924e990e923ffc259f01ec37f
  test("fresh multipart compaction gives each acknowledged phase its own handoff budget", async () => {
    const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-phased-fallback-compact-"));
    const provider: CodexProviderConfig = {
-@@ -1498,7 +1568,148 @@ test("structured compact rebuilds canonical context when its retained browser di
+@@ -1495,7 +1565,8 @@ test.each([false, true])("structured compact rebuild after retained browser loss
+     if (rateLimited) {
+       expect(events.at(-1)).toMatchObject({
+         type: "error", status: 429, errorType: "rate_limit_error", code: "rate_limit_exceeded",
+-        retryable: false, message: "ChatGPT rate limit: too many requests.",
++        retryable: false,
++        message: expect.stringMatching(/^ChatGPT rate limit: too many requests\. \(compaction trace: [a-f0-9]{12}\)$/),
+       });
+       expect(events.some(event => event.type === "done")).toBeFalse();
+       return;
+@@ -1511,7 +1582,148 @@ test.each([false, true])("structured compact rebuild after retained browser loss
    }
  });
  
@@ -9402,12 +9992,12 @@ index e937c62e6f97bbf6541bc7cae5f577c3ffb6da1c..2d1df20924e990e923ffc259f01ec37f
    const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-stale-retained-deadline-"));
    const provider: CodexProviderConfig = {
      adapter: "chatgpt-web",
-@@ -1553,7 +1764,7 @@ test("a disappeared retained source cannot leave its fresh compaction rebuild pa
+@@ -1566,7 +1778,7 @@ test("a disappeared retained source cannot leave its fresh compaction rebuild pa
        type: "error",
-       code: "compaction_handoff_failed",
+       code: "compaction_handoff_timeout",
        retryable: false,
--      message: "ChatGPT did not complete the context handoff. Retry the task.",
-+      message: expect.stringMatching(/ChatGPT context handoff failed: ChatGPT canonical compaction rebuild did not fully settle within 25ms \(compaction trace: [a-f0-9]{12}\)/),
+-      message: "ChatGPT compaction did not fully settle within 25ms",
++      message: expect.stringMatching(/ChatGPT canonical compaction rebuild did not fully settle within 25ms \(compaction trace: [a-f0-9]{12}\)/),
      });
    } finally {
      releaseBrowser?.();
@@ -9598,12 +10188,12 @@ index 0000000000000000000000000000000000000000..a10a1ae8819cc69571060b8273db60a1
 +});
 diff --git a/tests/turn-resilience.test.ts b/tests/turn-resilience.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8661fc6272b758ab310fb55d19cb8fc803d99250
+index 0000000000000000000000000000000000000000..41dcf12b27f6094af204a7e09228a22cd98617aa
 --- /dev/null
 +++ b/tests/turn-resilience.test.ts
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,224 @@
 +import { expect, test } from "bun:test";
-+import { mkdtempSync, rmSync } from "node:fs";
++import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 +import { join } from "node:path";
 +import { tmpdir } from "node:os";
 +import { ChatGptWebAdapterError } from "../src/adapters/chatgpt-web/adapter-error";
@@ -9628,6 +10218,53 @@ index 0000000000000000000000000000000000000000..8661fc6272b758ab310fb55d19cb8fc8
 +    turnId: `turn-${key}`,
 +  };
 +}
++
++for (const multipartParts of [2, 6] as const) {
++  test(`${multipartParts}-part journal retains replay guards across restart`, () => {
++    const root = mkdtempSync(join(tmpdir(), "cgw-in-flight-parts-"));
++    const path = join(root, "browser-in-flight.json");
++    try {
++      const journal = new ChatGptWebInFlightJournal(path, 60_000, "boot-one");
++      for (const phase of ["prepared", "sent", "accepted", "acknowledged", "completed"] as const) {
++        const handle = journal.begin(descriptor(phase));
++        handle.markPrepared({ transport: "multipart", multipartParts });
++        if (phase === "sent") handle.markSendActivated();
++        if (phase === "accepted") handle.markAccepted();
++        if (phase === "acknowledged") handle.markMultipartStageAcknowledged(1);
++        if (phase === "completed") handle.markCompleted();
++      }
++      const restarted = new ChatGptWebInFlightJournal(path, 60_000, "boot-two");
++      expect(restarted.recordsForTesting()).toHaveLength(5);
++      expect(restarted.recordsForTesting().every(record => record.multipartParts === multipartParts)).toBe(true);
++      for (const phase of ["sent", "accepted", "acknowledged"]) {
++        expect(() => restarted.begin(descriptor(phase))).toThrow("will not replay it automatically");
++      }
++      expect(() => restarted.begin(descriptor("prepared"))).not.toThrow();
++      expect(() => restarted.begin(descriptor("completed"))).not.toThrow();
++    } finally {
++      rmSync(root, { recursive: true, force: true });
++    }
++  });
++}
++
++test("legacy three-part journal preserves acknowledged-send recovery safety", () => {
++  const root = mkdtempSync(join(tmpdir(), "cgw-in-flight-legacy-"));
++  const path = join(root, "browser-in-flight.json");
++  try {
++    const journal = new ChatGptWebInFlightJournal(path, 60_000, "boot-one");
++    const handle = journal.begin(descriptor("legacy"));
++    handle.markPrepared({ transport: "multipart", multipartParts: 6 });
++    handle.markMultipartStageAcknowledged(2);
++    const snapshot = JSON.parse(readFileSync(path, "utf8"));
++    snapshot.entries[0].multipartParts = 3;
++    writeFileSync(path, JSON.stringify(snapshot));
++    const restarted = new ChatGptWebInFlightJournal(path, 60_000, "boot-two");
++    expect(restarted.recordsForTesting()[0]?.multipartParts).toBe(3);
++    expect(() => restarted.begin(descriptor("legacy"))).toThrow("acknowledged 2 staged context part(s)");
++  } finally {
++    rmSync(root, { recursive: true, force: true });
++  }
++});
 +
 +test("in-flight journal permits rebuild only before any browser side effect", () => {
 +  const root = mkdtempSync(join(tmpdir(), "cgw-in-flight-test-"));
@@ -9668,10 +10305,32 @@ index 0000000000000000000000000000000000000000..8661fc6272b758ab310fb55d19cb8fc8
 +  }
 +});
 +
++test("in-flight journal stays bounded without discarding ambiguous send records", () => {
++  const root = mkdtempSync(join(tmpdir(), "cgw-in-flight-capacity-test-"));
++  const path = join(root, "browser-in-flight.json");
++  try {
++    const journal = new ChatGptWebInFlightJournal(path, 60_000, "boot-one", 2);
++    const first = journal.begin(descriptor("first"));
++    first.markSendActivated();
++    const second = journal.begin(descriptor("second"));
++    second.markAccepted();
++
++    expect(journal.snapshot().blocked_entries).toBe(2);
++    expect(() => journal.begin(descriptor("third"))).toThrow("in-flight safety journal is full");
++    expect(journal.recordsForTesting()).toHaveLength(2);
++
++    const restarted = new ChatGptWebInFlightJournal(path, 60_000, "boot-two", 2);
++    expect(() => restarted.begin(descriptor("first"))).toThrow("will not replay it automatically");
++    expect(restarted.recordsForTesting()).toHaveLength(2);
++  } finally {
++    rmSync(root, { recursive: true, force: true });
++  }
++});
++
 +test("turn telemetry keeps bounded phase and first-output measurements", () => {
 +  const telemetry = new ChatGptWebTurnTelemetry(2);
 +  const handle = telemetry.start("turn-telemetry", "gpt-5.6-sol", false);
-+  handle.markPrepared({ transport: "multipart", multipartParts: 3, inputTokens: 100, messageTokens: 80, maxMessageChars: 500 });
++  handle.markPrepared({ transport: "multipart", multipartParts: 6, inputTokens: 100, messageTokens: 80, maxMessageChars: 500 });
 +  handle.markMultipartStageAcknowledged(1);
 +  handle.markSendActivated();
 +  handle.markAccepted();
@@ -9690,7 +10349,7 @@ index 0000000000000000000000000000000000000000..8661fc6272b758ab310fb55d19cb8fc8
 +  });
 +  expect(telemetry.snapshot().recent[0]).toMatchObject({
 +    transport: "multipart",
-+    multipart_parts: 3,
++    multipart_parts: 6,
 +    acknowledged_parts: 1,
 +    input_tokens: 100,
 +    message_tokens: 80,
@@ -9758,7 +10417,7 @@ index 0000000000000000000000000000000000000000..8661fc6272b758ab310fb55d19cb8fc8
 +  expect(unsupportedChatGptWebRequestFields({ background: false, service_tier: "auto" })).toEqual([]);
 +});
 diff --git a/tests/zero-risk-adapter.test.ts b/tests/zero-risk-adapter.test.ts
-index 2c9d5cede543228a9612399e9d9485b124f67127..025248940564755be12864fd747a7343363ec653 100644
+index 2c9d5cede543228a9612399e9d9485b124f67127..1bc0c2abc54f37ce323456ccbc3ba4274c1e2ac5 100644
 --- a/tests/zero-risk-adapter.test.ts
 +++ b/tests/zero-risk-adapter.test.ts
 @@ -7,9 +7,10 @@ import { join } from "node:path";
@@ -9773,7 +10432,7 @@ index 2c9d5cede543228a9612399e9d9485b124f67127..025248940564755be12864fd747a7343
  import { callTurnBroker, TurnBroker, type BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
  import { encodeCompactionSummary, SUMMARY_PREFIX } from "../src/responses/compaction";
  import { LAUNCHER_BROWSER_HOST_KIND, LAUNCHER_BROWSER_IDLE_URL } from "../src/launcher-browser-host";
-@@ -555,6 +556,47 @@ test("Zero Risk compaction uses a fresh manual checkpoint without leaking guide
+@@ -555,6 +556,48 @@ test("Zero Risk compaction uses a fresh manual checkpoint without leaking guide
    }
  });
  
@@ -9809,8 +10468,9 @@ index 2c9d5cede543228a9612399e9d9485b124f67127..025248940564755be12864fd747a7343
 +    await adapter.runTurn!(compact, { headers: new Headers() }, event => events.push(event));
 +    expect(checkpointStarts).toBe(1);
 +    expect(events.at(-1)).toMatchObject({
-+      type: "error", code: "compaction_handoff_failed",
-+      message: expect.stringContaining("checkpoint launch rejected"),
++      type: "error", status: 409, errorType: "invalid_request_error", code: "compaction_handoff_failed",
++      retryable: false,
++      message: expect.stringMatching(/^ChatGPT did not complete the context handoff\. Retry the task\. \(compaction trace: [a-f0-9]{12}\)$/),
 +    });
 +  } finally {
 +    chatGptTurnSessions.clear();

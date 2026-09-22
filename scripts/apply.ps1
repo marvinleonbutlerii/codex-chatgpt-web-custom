@@ -4,14 +4,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$base = '00aab23eb78a0d35ab575ff14044e29c0f80e711'
-$patch = Join-Path $PSScriptRoot '..\codex-chatgpt-web-custom-v5.0.8.patch'
-
-$head = (git -C $UpstreamPath rev-parse HEAD).Trim()
-if ($head -ne $base) {
-  throw "Expected upstream v5.0.8 commit $base, found $head"
-}
-
-git -C $UpstreamPath apply --check --binary $patch
+& (Join-Path $PSScriptRoot 'verify.ps1') -UpstreamPath $UpstreamPath
+$packageRoot = Split-Path $PSScriptRoot -Parent
+$manifest = Get-Content -LiteralPath (Join-Path $packageRoot 'manifest.json') -Raw | ConvertFrom-Json
+$patch = Join-Path $packageRoot $manifest.patch
 git -C $UpstreamPath apply --binary $patch
-Write-Output "Applied codex-chatgpt-web-custom-v5.0.8.patch to $UpstreamPath"
+if ($LASTEXITCODE -ne 0) { throw 'Patch application failed' }
+Write-Output "Applied $($manifest.patch) to $UpstreamPath"

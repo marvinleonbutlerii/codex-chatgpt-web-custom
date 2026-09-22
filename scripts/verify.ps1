@@ -4,11 +4,27 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$base = '00aab23eb78a0d35ab575ff14044e29c0f80e711'
-$patch = Join-Path $PSScriptRoot '..\codex-chatgpt-web-custom-v5.0.8.patch'
-$head = (git -C $UpstreamPath rev-parse HEAD).Trim()
-if ($head -ne $base) {
-  throw "Expected upstream v5.0.8 commit $base, found $head"
+$packageRoot = Split-Path $PSScriptRoot -Parent
+$manifest = Get-Content -LiteralPath (Join-Path $packageRoot 'manifest.json') -Raw | ConvertFrom-Json
+$patch = Join-Path $packageRoot $manifest.patch
+if ((Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash -ne $manifest.patchSha256) {
+  throw 'Patch SHA-256 does not match manifest.json'
 }
-git -C $UpstreamPath apply --check --binary $patch
-Write-Output "Patch applies cleanly to $head"
+
+$checkout = (Resolve-Path -LiteralPath $UpstreamPath).Path
+$top = git -C $checkout rev-parse --show-toplevel
+if ($LASTEXITCODE -ne 0) { throw 'UpstreamPath is not a Git working tree' }
+$resolvedTop = (Resolve-Path -LiteralPath $top).Path
+if ($checkout -ne $resolvedTop) { throw 'UpstreamPath must be the repository root' }
+$head = git -C $checkout rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve upstream HEAD' }
+if ($head -ne $manifest.baseCommit) {
+  throw "Expected upstream commit $($manifest.baseCommit), found $head"
+}
+$status = git -C $checkout status --porcelain --untracked-files=all
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect upstream worktree' }
+if ($status) { throw 'Upstream checkout must be clean, including untracked files' }
+
+git -C $checkout apply --check --binary $patch
+if ($LASTEXITCODE -ne 0) { throw 'Patch applicability check failed; nothing was applied' }
+Write-Output "Patch checksum and applicability verified against $head"
