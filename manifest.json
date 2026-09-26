@@ -3,11 +3,10 @@
   "upstreamVersion": "6.1.1",
   "baseRef": "v6.1.1",
   "baseCommit": "a13cd09950969f43e3b7e25c71fa43efaf5446c5",
-  "release": "v6.1.1-custom.1",
+  "release": "v6.1.1-custom.2",
   "distribution": "custom-integrations-source-patch",
   "patch": "codex-chatgpt-web-custom-v6.1.1.patch",
   "patchSha256": "447c634d6a85c878f16109d52150bdefe56ab4dad7cbd4bfa895bf4ee8c8906d",
-  "generatedFromWorktreeHead": "92f697374a9175297dbf5825ccb0127314be5100",
   "sourceTree": "20714505400697e97a12647dfc964f8fdf63a8e8",
   "generatedAt": "2026-09-26",
   "requiredBunVersion": "1.4.2",
@@ -22,7 +21,8 @@
   ],
   "verificationScripts": [
     "scripts/verify.ps1",
-    "scripts/apply.ps1"
+    "scripts/apply.ps1",
+    "scripts/verify-release.sh"
   ],
   "validation": {
     "rootTypecheck": "passed",

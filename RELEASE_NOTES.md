@@ -1,6 +1,8 @@
-# v6.1.1-custom.1
+# v6.1.1-custom.2
 
 Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web `v6.1.1`, based on commit `a13cd09950969f43e3b7e25c71fa43efaf5446c5`.
+
+The source patch is byte-for-byte identical to `v6.1.1-custom.1`. This release fixes distribution provenance and verification: the exact resulting Git tree is now authoritative and checked by both POSIX and PowerShell verification paths, patch statistics are validated, and the apply script verifies the final applied worktree.
 
 ## Highlights
 
@@ -21,4 +23,4 @@ Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web 
 
 This is a source patch, not a desktop installer or auto-updater. No live application was installed, relaunched, or changed by the source-patch workflow. To adopt the patch, apply it to a separate clean checkout and follow the upstream build/deploy instructions.
 
-Source commit: `92f697374a9175297dbf5825ccb0127314be5100`.
+Patched source tree: `20714505400697e97a12647dfc964f8fdf63a8e8`.
