@@ -1,6 +1,6 @@
-# v6.1.0-custom.1
+# v6.1.1-custom.1
 
-Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web `v6.1.0`, based on commit `293341084ac7a1ddd2de12fede3706023f5b6474`.
+Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web `v6.1.1`, based on commit `a13cd09950969f43e3b7e25c71fa43efaf5446c5`.
 
 ## Highlights
 
@@ -14,11 +14,11 @@ Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web 
 ## Validation
 
 - Root typecheck: passed.
-- Launcher typecheck: passed.
-- Root tests: 837 passed, 3 skipped, 0 failed.
-- Launcher tests: 351 passed, 4 skipped, 0 failed.
-- `git apply --check --binary` on a clean upstream `v6.1.0` checkout: passed.
+- Launcher typecheck: passed during the Windows package build.
+- Root tests: 849 passed, 27 skipped, 0 failed.
+- Launcher tests: 354 passed, 4 skipped, 0 failed.
+- `git apply --check --binary` on a clean upstream `v6.1.1` checkout: passed.
 
-This is a source patch, not a desktop installer or auto-updater. No live application was installed, relaunched, or changed. To adopt the patch, apply it to a separate clean checkout and follow the upstream build/deploy instructions.
+This is a source patch, not a desktop installer or auto-updater. No live application was installed, relaunched, or changed by the source-patch workflow. To adopt the patch, apply it to a separate clean checkout and follow the upstream build/deploy instructions.
 
-Source commit: `36d2cd21e6c2f0f8619cdfbea7c54da2ebc9e3a7`.
+Source commit: `92f697374a9175297dbf5825ccb0127314be5100`.
