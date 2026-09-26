@@ -3,17 +3,17 @@
   "upstreamVersion": "6.1.1",
   "baseRef": "v6.1.1",
   "baseCommit": "a13cd09950969f43e3b7e25c71fa43efaf5446c5",
-  "release": "v6.1.1-custom.2",
+  "release": "v6.1.1-custom.3",
   "distribution": "custom-integrations-source-patch",
   "patch": "codex-chatgpt-web-custom-v6.1.1.patch",
-  "patchSha256": "447c634d6a85c878f16109d52150bdefe56ab4dad7cbd4bfa895bf4ee8c8906d",
-  "sourceTree": "20714505400697e97a12647dfc964f8fdf63a8e8",
+  "patchSha256": "337dc653a01e9053f8918b30da554a1f79df7a55f308f826d203987b58d0e559",
+  "sourceTree": "c63feecb94bfc958c51b42a1f95b323cb2053b76",
   "generatedAt": "2026-09-26",
   "requiredBunVersion": "1.4.2",
   "patchSummary": {
     "filesChanged": 87,
-    "insertions": 6207,
-    "deletions": 842
+    "insertions": 6217,
+    "deletions": 852
   },
   "generatedArtifactsExcluded": [
     "launcher/artifacts*",

@@ -1,10 +1,22 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 11f2c2c483cf4e8fb1a6a2efe275459c5e05b260..9aaff9f743c6e13c01a08f1f18bbcfb5fd167e36 100644
+index 11f2c2c483cf4e8fb1a6a2efe275459c5e05b260..4c7f2c3aabe48c219c0cf96f516b175b636fc4c6 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -34,14 +34,14 @@ jobs:
+@@ -16,7 +16,7 @@ jobs:
+         os: [macos-15, ubuntu-latest, windows-latest]
+     runs-on: ${{ matrix.os }}
+     steps:
+-      - uses: actions/checkout@v6
++      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+       - name: Validate launcher installer with Windows PowerShell 5.1
+         if: runner.os == 'Windows'
+         shell: powershell
+@@ -32,16 +32,16 @@ jobs:
+           if (-not [Environment]::Is64BitOperatingSystem) {
+             throw "The Windows CI runner must be 64-bit"
            }
-       - uses: oven-sh/setup-bun@v2
+-      - uses: oven-sh/setup-bun@v2
++      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
          with:
 -          bun-version: 1.4.0
 +          bun-version: 1.4.2
@@ -19,13 +31,29 @@ index 11f2c2c483cf4e8fb1a6a2efe275459c5e05b260..9aaff9f743c6e13c01a08f1f18bbcfb5
        - name: Prepare compatible Linux libnotify
          if: runner.os == 'Linux'
          run: |
+@@ -68,8 +68,8 @@ jobs:
+   actionlint:
+     runs-on: ubuntu-latest
+     steps:
+-      - uses: actions/checkout@v6
+-      - uses: actions/setup-go@v6
++      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
++      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+         with:
+           go-version: "1.26.x"
+           cache: false
 diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
-index a003141298b50e795b55a8c1c670c8a0a74a5506..2184b033ac13b9309710e0a08499fec45f5f97a0 100644
+index a003141298b50e795b55a8c1c670c8a0a74a5506..0861e8e810437f5276dee4d434721d4d15e29573 100644
 --- a/.github/workflows/release.yml
 +++ b/.github/workflows/release.yml
-@@ -28,14 +28,14 @@ jobs:
-       - uses: actions/checkout@v6
-       - uses: oven-sh/setup-bun@v2
+@@ -25,17 +25,17 @@ jobs:
+             runtime_asset: codex-chatgpt-web-windows-amd64.zip
+     runs-on: ${{ matrix.runner }}
+     steps:
+-      - uses: actions/checkout@v6
+-      - uses: oven-sh/setup-bun@v2
++      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
++      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
          with:
 -          bun-version: 1.4.0
 +          bun-version: 1.4.2
@@ -40,15 +68,35 @@ index a003141298b50e795b55a8c1c670c8a0a74a5506..2184b033ac13b9309710e0a08499fec4
        - name: Prepare compatible Linux libnotify
          if: runner.os == 'Linux'
          run: |
-@@ -94,7 +94,7 @@ jobs:
-       - uses: actions/checkout@v6
-       - uses: oven-sh/setup-bun@v2
+@@ -76,7 +76,7 @@ jobs:
+         if: runner.os == 'Windows'
+         shell: pwsh
+         run: Compress-Archive -Path launcher/build/runtime/* -DestinationPath "${{ matrix.runtime_asset }}"
+-      - uses: actions/upload-artifact@v4
++      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+         with:
+           name: release-${{ matrix.runner }}
+           path: |
+@@ -91,15 +91,15 @@ jobs:
+     needs: build
+     runs-on: ubuntu-latest
+     steps:
+-      - uses: actions/checkout@v6
+-      - uses: oven-sh/setup-bun@v2
++      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
++      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
          with:
 -          bun-version: 1.4.0
 +          bun-version: 1.4.2
        - run: bun install --frozen-lockfile
        - run: bun install --frozen-lockfile
          working-directory: launcher
+       - run: bun run licenses
+-      - uses: actions/download-artifact@v4
++      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+         with:
+           path: release-assets
+           merge-multiple: true
 @@ -110,7 +110,7 @@ jobs:
        - name: Add licenses and installers
          run: |

@@ -56,7 +56,7 @@ jobs:
             LC_ALL=C find "$release_name" -type f -print | LC_ALL=C sort | zip -X -q "$asset_zip" -@
           )
           echo "asset_zip=$asset_zip" >> "$GITHUB_OUTPUT"
-      - name: Publish immutable GitHub prerelease assets
+      - name: Publish verified GitHub prerelease assets
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET_ZIP: ${{ steps.package.outputs.asset_zip }}
@@ -65,40 +65,120 @@ jobs:
           patch_name="$(jq -r '.patch' manifest.json)"
           release_files=("$ASSET_ZIP" "$patch_name" manifest.json SHA256SUMS.txt)
 
+          local_file_for() {
+            local wanted="$1"
+            local file
+            for file in "${release_files[@]}"; do
+              if [[ "$(basename "$file")" == "$wanted" ]]; then
+                printf '%s\n' "$file"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          verify_complete_assets() {
+            local destination="$1"
+            local file name
+            mapfile -t remote_names < <(gh release view "$release_name" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name')
+            [[ "${#remote_names[@]}" -eq "${#release_files[@]}" ]] || {
+              echo "Release has an unexpected asset inventory" >&2
+              exit 1
+            }
+            mkdir -p "$destination"
+            gh release download "$release_name" --repo "$GITHUB_REPOSITORY" --dir "$destination"
+            for file in "${release_files[@]}"; do
+              name="$(basename "$file")"
+              [[ -f "$destination/$name" ]] || {
+                echo "Release asset $name is missing" >&2
+                exit 1
+              }
+              cmp -s "$file" "$destination/$name" || {
+                echo "Release asset $name differs from the assembled artifact" >&2
+                exit 1
+              }
+            done
+          }
+
+          assert_published_immutable() {
+            local immutable
+            immutable="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_name" --jq '.immutable')"
+            [[ "$immutable" == "true" ]] || {
+              echo "Published release $release_name is mutable. Enable repository-level release immutability before publishing release tags." >&2
+              exit 1
+            }
+          }
+
           if gh release view "$release_name" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$release_name" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft \
+              --jq '.isDraft')"
             mapfile -t remote_names < <(gh release view "$release_name" \
               --repo "$GITHUB_REPOSITORY" \
               --json assets \
               --jq '.assets[].name')
 
-            [[ "${#remote_names[@]}" -eq "${#release_files[@]}" ]] || {
-              echo "Existing release has an unexpected asset inventory" >&2
-              exit 1
-            }
-
             existing_dir="$RUNNER_TEMP/existing-$release_name"
             mkdir -p "$existing_dir"
-            gh release download "$release_name" --repo "$GITHUB_REPOSITORY" --dir "$existing_dir"
-
-            for file in "${release_files[@]}"; do
-              name="$(basename "$file")"
-              remote_file="$existing_dir/$name"
-              [[ -f "$remote_file" ]] || {
-                echo "Existing release asset $name is missing" >&2
+            if [[ "${#remote_names[@]}" -gt 0 ]]; then
+              gh release download "$release_name" --repo "$GITHUB_REPOSITORY" --dir "$existing_dir"
+            fi
+            for name in "${remote_names[@]}"; do
+              local_file="$(local_file_for "$name")" || {
+                echo "Existing release contains unexpected asset $name" >&2
                 exit 1
               }
-              cmp -s "$file" "$remote_file" || {
-                echo "Existing release asset $name is missing or has a different digest" >&2
+              cmp -s "$local_file" "$existing_dir/$name" || {
+                echo "Existing release asset $name differs from the assembled artifact" >&2
                 exit 1
               }
             done
+
+            if [[ "$is_draft" == "true" ]]; then
+              for file in "${release_files[@]}"; do
+                name="$(basename "$file")"
+                found=false
+                for remote_name in "${remote_names[@]}"; do
+                  if [[ "$remote_name" == "$name" ]]; then
+                    found=true
+                    break
+                  fi
+                done
+                if [[ "$found" == "false" ]]; then
+                  gh release upload "$release_name" --repo "$GITHUB_REPOSITORY" "$file"
+                fi
+              done
+
+              verify_complete_assets "$RUNNER_TEMP/ready-$release_name"
+              gh release edit "$release_name" --repo "$GITHUB_REPOSITORY" --draft=false
+              assert_published_immutable
+              echo "Recovered and published draft release $release_name with exact immutable assets"
+              exit 0
+            fi
+
+            verify_complete_assets "$RUNNER_TEMP/verified-$release_name"
+            assert_published_immutable
             echo "Release $release_name already exists with the exact expected assets; leaving it unchanged"
             exit 0
           fi
 
           gh release create "$release_name" \
             --verify-tag \
+            --draft \
             --prerelease \
             --title "Codex ChatGPT Web $release_name — custom source patch" \
-            --notes-file RELEASE_NOTES.md \
+            --notes-file RELEASE_NOTES.md
+
+          gh release upload "$release_name" \
+            --repo "$GITHUB_REPOSITORY" \
             "${release_files[@]}"
+
+          verify_complete_assets "$RUNNER_TEMP/published-$release_name"
+          gh release edit "$release_name" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+          assert_published_immutable

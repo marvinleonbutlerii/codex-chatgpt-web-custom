@@ -1,8 +1,8 @@
-# v6.1.1-custom.2
+# v6.1.1-custom.3
 
 Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web `v6.1.1`, based on commit `a13cd09950969f43e3b7e25c71fa43efaf5446c5`.
 
-The source patch is byte-for-byte identical to `v6.1.1-custom.1`. This release fixes distribution provenance and verification: the exact resulting Git tree is now authoritative and checked by both POSIX and PowerShell verification paths, patch statistics are validated, and the apply script verifies the final applied worktree.
+The application/runtime delta is unchanged from `v6.1.1-custom.2`. This release hardens the patched project's GitHub Actions supply chain by replacing every mutable third-party action tag with a full, upstream-verified commit SHA. Distribution publishing is also draft-first so assets can be assembled and verified before publication; repository-level GitHub release immutability remains the required publication setting for locking the final tag/assets and generating GitHub's release attestation.
 
 ## Highlights
 
@@ -11,7 +11,8 @@ The source patch is byte-for-byte identical to `v6.1.1-custom.1`. This release f
 - Canonical immutable, namespace-aware tool registry unifies discovery and invocation; Responses Lite preserves namespaced custom/freeform/tool-search tools.
 - Stronger retained compaction, response ancestry/replay, and helper/browser lifecycle safety.
 - Native V2 subagent flags are deterministically enabled and restored; launcher debugging-port and Windows package-smoke checks are hardened.
-- Release automation validates exact asset inventories and digests and refuses to clobber mismatched assets.
+- All third-party actions used by the patched upstream CI/release workflows are pinned to full verified commit SHAs.
+- Release automation validates exact asset inventories and digests, uses draft-first publication, and refuses to clobber mismatched assets.
 
 ## Validation
 
@@ -20,7 +21,8 @@ The source patch is byte-for-byte identical to `v6.1.1-custom.1`. This release f
 - Root tests: 849 passed, 27 skipped, 0 failed.
 - Launcher tests: 354 passed, 4 skipped, 0 failed.
 - `git apply --check --binary` on a clean upstream `v6.1.1` checkout: passed.
+- Application/runtime files are unchanged from `v6.1.1-custom.2`; this release's source delta beyond `.2` is confined to GitHub workflow action references.
 
 This is a source patch, not a desktop installer or auto-updater. No live application was installed, relaunched, or changed by the source-patch workflow. To adopt the patch, apply it to a separate clean checkout and follow the upstream build/deploy instructions.
 
-Patched source tree: `20714505400697e97a12647dfc964f8fdf63a8e8`.
+Patched source tree: `c63feecb94bfc958c51b42a1f95b323cb2053b76`.
