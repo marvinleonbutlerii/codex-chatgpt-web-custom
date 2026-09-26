@@ -1,0 +1,56 @@
+name: Source patch release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags:
+      - 'v*-custom.*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Verify checksums, pinned upstream base, and patch applicability
+        run: bash scripts/verify-release.sh
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Verify and assemble source-patch bundle
+        id: package
+        run: |
+          bash scripts/verify-release.sh
+          release_name="$(jq -r '.release' manifest.json)"
+          patch_name="$(jq -r '.patch' manifest.json)"
+          release_dir="$RUNNER_TEMP/$release_name"
+          asset_zip="$RUNNER_TEMP/$release_name-source-patch.zip"
+          mkdir -p "$release_dir/scripts"
+          cp README.md RELEASE_NOTES.md LICENSE-upstream.txt manifest.json SHA256SUMS.txt "$release_dir/"
+          cp "$patch_name" "$release_dir/"
+          cp scripts/apply.ps1 scripts/verify.ps1 scripts/verify-release.sh "$release_dir/scripts/"
+          (cd "$RUNNER_TEMP" && zip -qr "$asset_zip" "$release_name")
+          echo "asset_zip=$asset_zip" >> "$GITHUB_OUTPUT"
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_ZIP: ${{ steps.package.outputs.asset_zip }}
+        run: |
+          patch_name="$(jq -r '.patch' manifest.json)"
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --prerelease \
+            --title "Codex ChatGPT Web $GITHUB_REF_NAME — custom source patch" \
+            --notes-file RELEASE_NOTES.md \
+            "$ASSET_ZIP" "$patch_name" manifest.json SHA256SUMS.txt

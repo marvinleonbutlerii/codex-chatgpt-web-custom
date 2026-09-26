@@ -1,15 +1,15 @@
 {
   "upstream": "https://github.com/miuuyy/codex-chatgpt-web",
-  "upstreamVersion": "5.0.8",
-  "baseRef": "main",
-  "baseCommit": "eaf4f09ae92d4dc4429fa597b0861663138f08f8",
-  "release": "v5.0.8-custom.1",
+  "upstreamVersion": "6.0.0",
+  "baseRef": "v6.0.0",
+  "baseCommit": "212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827",
+  "release": "v6.0.0-custom.1",
   "distribution": "custom-integrations-source-patch",
-  "patch": "codex-chatgpt-web-custom-v5.0.8.patch",
-  "patchSha256": "ad7a0e91f3a3acbcba01669661622b2f85426e83ccb963dbf742a2a76111ab93",
-  "generatedFromWorktreeHead": "8880ef46404571bfc32e5537358d1c08952c25e6",
-  "sourceTree": "44f90116b0385c031c7ec1eb2f7ee7c4a6230587",
-  "generatedAt": "2026-09-22",
+  "patch": "codex-chatgpt-web-custom-v6.0.0.patch",
+  "patchSha256": "30a0d910fb73e344552ee04662674df43a9d56f3707155121d6248065abc84f5",
+  "generatedFromWorktreeHead": "ff9a3f4f83d652ffcc100a782ddb1a86991300d3",
+  "sourceTree": "dbd3570d734d749244a8ac8c4a091aa8d5b687bf",
+  "generatedAt": "2026-09-25",
   "requiredBunVersion": "1.4.2",
   "generatedArtifactsExcluded": [
     "launcher/artifacts*",
@@ -17,11 +17,24 @@
   ],
   "verificationScripts": [
     "scripts/verify.ps1",
-    "scripts/apply.ps1"
+    "scripts/apply.ps1",
+    "scripts/verify-release.sh"
   ],
   "validation": {
-    "typecheck": "passed",
-    "focusedTestsPassed": 17,
-    "liveApplicationValidation": false
+    "rootTypecheck": "passed",
+    "launcherTypecheck": "passed",
+    "rootTests": {
+      "passed": 829,
+      "skipped": 1,
+      "failed": 0
+    },
+    "launcherTests": {
+      "passed": 340,
+      "skipped": 4,
+      "failed": 0
+    },
+    "cleanBasePatchApply": "passed",
+    "liveApplicationValidation": false,
+    "liveApplicationChanged": false
   }
 }

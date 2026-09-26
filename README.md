@@ -1,41 +1,39 @@
 # Codex ChatGPT Web custom integrations
 
-Patch-only distribution of the existing custom integrations for [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web). This is not a standalone Codex fork or an application installer. Generated binaries, browser profiles, credentials, global Codex configuration, skills, and research documents are not included.
+This repository distributes the custom integrations as source patches against the upstream [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web) project. It is not a standalone application, installer, or auto-updater. Release artifacts do not include generated binaries, browser profiles, credentials, personal Codex configuration, or research documents.
 
-## Release `v5.0.8-custom.1`
+## Release `v6.0.0-custom.1`
 
-- Upstream package version: `5.0.8`.
-- Exact upstream base: `eaf4f09ae92d4dc4429fa597b0861663138f08f8` (upstream `main` inspected September 22, 2026).
-- Custom source commit: `8880ef46404571bfc32e5537358d1c08952c25e6`.
-- Runtime requirement retained from the custom line: Bun `1.4.2`.
-- Patch: `codex-chatgpt-web-custom-v5.0.8.patch`.
+- Upstream version: `6.0.0`.
+- Exact clean base: upstream tag `v6.0.0`, commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`.
+- Rebased custom source commit: `ff9a3f4f83d652ffcc100a782ddb1a86991300d3`.
+- Patch: `codex-chatgpt-web-custom-v6.0.0.patch`.
+- Runtime requirement: Bun `1.4.2`.
 
-**The base is no longer the original `v5.0.8` tag.** Use the exact commit below. The refreshed patch contains only the custom delta against that base; upstream changes are not republished as custom changes. Do not apply this package on top of an older custom patch or an edited checkout.
+The patch is intended for a fresh, clean checkout at the exact base above. Do not apply it on top of the older `v5.0.8-custom.1` patch, another custom release, or a modified checkout.
 
-### Changes in this revision
+### What this custom delta adds
 
-- Retain six-part multipart journal records after restart, preventing automatic replay of uncertain sends. Existing two-part behavior and legacy three-part recovery guards remain supported.
-- Partition immutable MCP context once per envelope, reuse it for sequential/repeated chunk reads, and keep the cached array private. Exact payloads, hashes, and Unicode boundaries are preserved.
-- Validate persisted continuation ancestry without repeatedly materializing full histories. Missing parents and cycles are rejected while valid shared branches survive.
-- Check patch integrity, exact base, clean checkout, and native Git exit codes before application.
+- More reliable large-context transport, bounded chunk handling, and persisted recovery for interrupted/uncertain sends.
+- Better retention and validation of conversation ancestry and response state during continuation and compaction.
+- Custom MCP/skill context integration, tool routing, and bridge/turn diagnostics.
+- Browser/launcher hardening and focused regression coverage for the retained integrations.
 
-The patch retains the existing custom MCP context and skill transport, continuation/compaction handling, bridge diagnostics, and launcher/runtime integration. It does not introduce a new bridge, UI, database, runtime upgrade, or global instruction changes. The upstream MIT notice is in `LICENSE-upstream.txt`.
+The delta retains existing project behavior where compatible with upstream 6.0.0. It is a source change set, not a claim that a packaged desktop build or live ChatGPT session was validated.
 
 ## Apply to a fresh upstream checkout
 
-Extract the release ZIP separately from the upstream checkout, then run:
+Keep your current checkout as a rollback copy. Clone or use a separate fresh checkout, then pin it to the exact base:
 
 ```powershell
 git clone https://github.com/miuuyy/codex-chatgpt-web.git
-git -C codex-chatgpt-web checkout --detach eaf4f09ae92d4dc4429fa597b0861663138f08f8
+git -C codex-chatgpt-web checkout --detach 212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827
+& C:/path/to/custom-integrations/scripts/verify.ps1 -UpstreamPath ./codex-chatgpt-web
 & C:/path/to/custom-integrations/scripts/apply.ps1 -UpstreamPath ./codex-chatgpt-web
 ```
 
-Use `scripts/verify.ps1 -UpstreamPath <checkout>` for a non-mutating checksum/base/applicability check. `manifest.json` records the source tree and patch hash; `SHA256SUMS.txt` covers the distribution files. The scripts stop on failed Git commands and refuse dirty or wrong-base checkouts.
+The apply script checks the patch checksum, exact base, clean worktree, and Git applicability before modifying the checkout. Build the patched source using the upstream instructions and Bun `1.4.2`. The patch does not install, restart, or update an already-running app; adopting it is a separate manual build/deploy step.
 
-After applying, follow the patched upstream build instructions with Bun `1.4.2`. This package does not build, install, restart, or modify the running application. Preserve any existing checkout for rollback; adoption should use a separate checkout rather than overwriting local changes.
+## Validation
 
-## Validation boundary
-
-TypeScript typecheck and 17 focused regression tests passed for the changed source paths, including multipart restart safety, Unicode context reads, adapter handoff, and continuation persistence. Applying the released patch to its exact clean base reconstructs the committed source tree. No live ChatGPT session, target application launch, full release suite, or platform installer validation was performed. This is a source-patch prerelease, not a claim of a fully validated packaged application.
-
+The rebased tree passed root and launcher typechecks, the full root test suite (829 passed, 1 skipped), and the full launcher suite (340 passed, 4 skipped). The generated patch was applied with `git apply --check` to a clean checkout at the exact upstream tag. No live application, ChatGPT session, or platform installer was launched or validated. See `manifest.json` and `RELEASE_NOTES.md` for the release record.

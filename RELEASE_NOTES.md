@@ -1,26 +1,22 @@
-# v5.0.8-custom.1
+# v6.0.0-custom.1
 
-Custom-integrations-only source patch for codex-chatgpt-web 5.0.8, based on upstream commit `eaf4f09ae92d4dc4429fa597b0861663138f08f8`.
+Custom-integrations-only source-patch prerelease for upstream codex-chatgpt-web `v6.0.0`, based on commit `212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827`.
 
-## Changes
+## Highlights
 
-- Fix six-part journal recovery so uncertain sends remain protected against automatic replay; retain legacy three-part records.
-- Reuse immutable MCP context partitions without changing payload fidelity or exposing cached arrays.
-- Remove repeated full-history materialization from continuation snapshot ancestry validation.
-- Refresh the existing custom delta against the current upstream base and make patch application fail on checksum, base, cleanliness, or Git errors.
-
-## Use
-
-Download and extract `codex-chatgpt-web-custom-v5.0.8-custom.1.zip`; follow its README and apply script against a fresh checkout at the exact base commit. The original upstream `v5.0.8` tag and previously patched checkouts are not valid application targets. Bun remains pinned to `1.4.2` in the custom source.
-
-The ZIP contains the patch, pinned manifest, SHA-256 checksums, apply/verify scripts, documentation, and upstream license. The standalone patch, manifest, and checksum files are also attached. No full upstream source mirror, credentials, profiles, global configuration, or installer is included.
+- Hardened large-context/MCP transport and restart recovery, including guardrails against replaying uncertain sends.
+- Improved continuation/compaction ancestry checks and response-state handling.
+- Retained custom tool routing, bridge integration, browser/launcher reliability work, and regression tests on the upstream 6.0.0 base.
+- Simplified the source-patch release contract: exact upstream tag and commit, SHA-256 verification, clean-tree requirement, applicability check, and a tag-triggered prerelease workflow.
 
 ## Validation
 
-- TypeScript typecheck passed.
-- 17 focused regression tests passed.
-- Clean-base patch reconstruction matches the committed custom source tree.
+- Root typecheck: passed.
+- Launcher typecheck: passed.
+- Root tests: 829 passed, 1 skipped, 0 failed.
+- Launcher tests: 340 passed, 4 skipped, 0 failed.
+- `git apply --check --binary` on a clean upstream `v6.0.0` checkout: passed.
 
-Source commit: `8880ef46404571bfc32e5537358d1c08952c25e6`.
+This is a source patch, not a desktop installer or auto-updater. No live application was installed, relaunched, or changed. To adopt the patch, apply it to a separate clean checkout and follow the upstream build/deploy instructions.
 
-This prerelease distributes source integration changes only. No live ChatGPT/application launch, installation, full release suite, or cross-platform packaged-app validation was performed. Existing installations were left unchanged.
+Source commit: `ff9a3f4f83d652ffcc100a782ddb1a86991300d3`.
