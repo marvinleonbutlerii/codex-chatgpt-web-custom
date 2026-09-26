@@ -6,18 +6,18 @@ This repository distributes the custom integrations as source patches against th
 
 - Upstream version: `6.1.1`.
 - Exact clean base: upstream tag `v6.1.1`, commit `a13cd09950969f43e3b7e25c71fa43efaf5446c5`.
-- Patched source tree: `c63feecb94bfc958c51b42a1f95b323cb2053b76`.
-- Patch: `codex-chatgpt-web-custom-v6.1.1.patch` (SHA-256 `337dc653a01e9053f8918b30da554a1f79df7a55f308f826d203987b58d0e559`).
-- Delta: 87 files, 6,217 insertions, 852 deletions.
+- Patched source tree: `afbb0fd9af62ed4141407562d478380095f5307d`.
+- Patch: `codex-chatgpt-web-custom-v6.1.1.patch` (SHA-256 `a25095b4a4a242044b4a0e9e88ce00fc3eff21a641d02810218892113985c2a2`).
+- Delta: 87 files, 6,299 insertions, 854 deletions.
 - Runtime requirement: Bun `1.4.2`.
 
-`v6.1.1-custom.3` preserves the application/runtime delta from `v6.1.1-custom.2` and additionally pins every third-party GitHub Action used by the patched upstream CI and release workflows to a full, verified commit SHA. The distribution release workflow creates new releases as drafts, uploads and verifies the complete asset set, and only then publishes them. Enable GitHub repository-level release immutability before tagging a release so GitHub locks the published tag/assets and generates the release attestation.
+`v6.1.1-custom.3` extends `v6.1.1-custom.2` with two hardening changes. It pins every third-party GitHub Action used by the patched upstream CI and release workflows to a full, verified commit SHA, and it reconciles durable ambiguous-send journal records when native Codex history authoritatively marks the corresponding prior turn aborted. The latter preserves delayed-replay rejection through a bounded tombstone while allowing normal terminal retention and capacity reclamation. The distribution release workflow creates new releases as drafts, uploads and verifies the complete asset set, and only then publishes them. Enable GitHub repository-level release immutability before tagging a release so GitHub locks the published tag/assets and generates the release attestation.
 
 The patch is intended for a fresh, clean checkout at the exact base above. Do not apply it on top of the older `v5.0.8-custom.1`, `v6.0.0-custom.1`, or `v6.1.0-custom.1` patch, another custom release, or a modified checkout.
 
 ### What this custom delta adds
 
-- Durable in-flight send recovery that blocks duplicate browser submissions after ambiguous sends or restarts, plus bounded retry and privacy-safe timing telemetry.
+- Durable in-flight send recovery that blocks duplicate browser submissions after ambiguous sends or restarts, reconciles guards only from authoritative native abort evidence, and keeps bounded retry and privacy-safe timing telemetry.
 - Exact SHA-256-identified, chunked MCP transport for large canonical Full-mode context; improved six-part Bigger Context staging and compaction budgeting.
 - One immutable, namespace-aware Codex tool registry shared by discovery and invocation, with stricter tool identity checks and fuller custom/freeform/tool-search preservation.
 - Stronger retained-turn, native compaction, response ancestry, replay, and browser-helper lifecycle handling.

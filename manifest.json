@@ -6,14 +6,14 @@
   "release": "v6.1.1-custom.3",
   "distribution": "custom-integrations-source-patch",
   "patch": "codex-chatgpt-web-custom-v6.1.1.patch",
-  "patchSha256": "337dc653a01e9053f8918b30da554a1f79df7a55f308f826d203987b58d0e559",
-  "sourceTree": "c63feecb94bfc958c51b42a1f95b323cb2053b76",
+  "patchSha256": "a25095b4a4a242044b4a0e9e88ce00fc3eff21a641d02810218892113985c2a2",
+  "sourceTree": "afbb0fd9af62ed4141407562d478380095f5307d",
   "generatedAt": "2026-09-26",
   "requiredBunVersion": "1.4.2",
   "patchSummary": {
     "filesChanged": 87,
-    "insertions": 6217,
-    "deletions": 852
+    "insertions": 6299,
+    "deletions": 854
   },
   "generatedArtifactsExcluded": [
     "launcher/artifacts*",
@@ -28,7 +28,7 @@
     "rootTypecheck": "passed",
     "launcherTypecheck": "passed",
     "rootTests": {
-      "passed": 849,
+      "passed": 850,
       "skipped": 27,
       "failed": 0
     },

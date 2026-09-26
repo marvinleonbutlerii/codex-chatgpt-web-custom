@@ -2303,10 +2303,10 @@ index 0000000000000000000000000000000000000000..22b3665d297091c5e6955d87ab5a29f6
 +}
 diff --git a/src/adapters/chatgpt-web/in-flight-journal.ts b/src/adapters/chatgpt-web/in-flight-journal.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..0ac99cce0801dc8ad9ffd0838ec2049d3fd2203b
+index 0000000000000000000000000000000000000000..694efb2bb9d54f43c87d87092033f50ab5e478ad
 --- /dev/null
 +++ b/src/adapters/chatgpt-web/in-flight-journal.ts
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,421 @@
 +import { randomUUID } from "node:crypto";
 +import { existsSync, readFileSync } from "node:fs";
 +import { join } from "node:path";
@@ -2506,6 +2506,14 @@ index 0000000000000000000000000000000000000000..0ac99cce0801dc8ad9ffd0838ec2049d
 +  begin(descriptor: ChatGptWebInFlightDescriptor, now = Date.now()): ChatGptWebInFlightHandle {
 +    this.prune(now);
 +    const existing = this.records.get(descriptor.key);
++    if (existing?.terminal && existing.phase === "aborted" && existing.lastError?.code === "native_turn_aborted") {
++      throw new ChatGptWebAdapterError("Native Codex already marked this ChatGPT Web turn interrupted; it cannot be replayed.", {
++        status: 499,
++        errorType: "client_closed_request",
++        code: "client_cancelled",
++        retryable: false,
++      });
++    }
 +    if (existing && !existing.terminal) {
 +      if (existing.ownerId !== this.ownerId) {
 +        if (this.safeToRebuild(existing)) {
@@ -2569,6 +2577,38 @@ index 0000000000000000000000000000000000000000..0ac99cce0801dc8ad9ffd0838ec2049d
 +      terminal_entries: terminal,
 +      persistence_failures: this.persistenceFailures,
 +    };
++  }
++
++  /**
++   * Native Codex history is authoritative when it marks an earlier turn interrupted. Convert any
++   * matching durable ambiguity guard into a bounded tombstone: delayed replays remain rejected,
++   * while the normal terminal TTL/capacity policy can eventually reclaim the record.
++   */
++  retireNativeAbortedTurns(
++    threadId: string | undefined,
++    abortedTurnIds: ReadonlySet<string>,
++    now = Date.now(),
++  ): number {
++    if (!threadId || abortedTurnIds.size === 0) return 0;
++    let retired = 0;
++    for (const record of this.records.values()) {
++      if (record.terminal
++        || record.threadId !== threadId
++        || record.turnId === undefined
++        || !abortedTurnIds.has(record.turnId)) continue;
++      record.phase = "aborted";
++      record.terminal = true;
++      record.uncertain = false;
++      record.lastError = {
++        message: "Native Codex marked this turn interrupted",
++        status: 499,
++        code: "native_turn_aborted",
++      };
++      record.updatedAt = now;
++      retired += 1;
++    }
++    if (retired > 0) this.persist(now);
++    return retired;
 +  }
 +
 +  recordsForTesting(): ChatGptWebInFlightRecord[] {
@@ -2689,7 +2729,7 @@ index 0000000000000000000000000000000000000000..0ac99cce0801dc8ad9ffd0838ec2049d
 +
 +export const chatGptWebInFlightJournal = new ChatGptWebInFlightJournal();
 diff --git a/src/adapters/chatgpt-web/index.ts b/src/adapters/chatgpt-web/index.ts
-index 6043500a0634dd965ad767f67f35d33b19b9e5f0..e44afd2d5995f08ccc48247c593f200a21b8252d 100644
+index 6043500a0634dd965ad767f67f35d33b19b9e5f0..61d9f646d39c8bead9268f4b255f8c9ff91fa5a3 100644
 --- a/src/adapters/chatgpt-web/index.ts
 +++ b/src/adapters/chatgpt-web/index.ts
 @@ -24,9 +24,11 @@ import { ChatGptWebAdapterError } from "./adapter-error";
@@ -3291,7 +3331,15 @@ index 6043500a0634dd965ad767f67f35d33b19b9e5f0..e44afd2d5995f08ccc48247c593f200a
                  status: upstreamError?.status ?? 409,
                  errorType: upstreamError?.errorType ?? "invalid_request_error",
                  code: upstreamError?.code ?? "compaction_handoff_failed",
-@@ -1154,16 +1351,35 @@ export function createChatGptWebAdapter(
+@@ -1149,21 +1346,41 @@ export function createChatGptWebAdapter(
+         const nativeIdentity = extractChatGptTurnIdentity(parsed);
+         const nativeTurnId = nativeIdentity.turnId;
+         if (!nativeTurnId) throw new Error("ChatGPT web requires native Codex turn_id metadata for browser ownership");
+-        const abortedTurnIds = manualRequest ? new Set(priorChatGptAbortedTurnIds(parsed)) : undefined;
+-        if (abortedTurnIds?.size) {
++        const abortedTurnIds = new Set(priorChatGptAbortedTurnIds(parsed));
++        if (abortedTurnIds.size) {
++          chatGptWebInFlightJournal.retireNativeAbortedTurns(nativeIdentity.threadId, abortedTurnIds);
            chatGptTurnSessions.retireAbortedOwnerTurns(ownerKey, abortedTurnIds, executionKey);
          }
          const traceId = chatGptWebTraceId(provider, parsed);
@@ -3337,7 +3385,7 @@ index 6043500a0634dd965ad767f67f35d33b19b9e5f0..e44afd2d5995f08ccc48247c593f200a
          const roundKey = chatGptTurnRoundKey(parsed);
          const emitRoundEvents = (events: readonly AdapterEvent[]): void => {
            // Journal the complete synchronous event batch before touching the HTTP observer. If the
-@@ -1416,6 +1632,9 @@ export function createChatGptWebAdapter(
+@@ -1416,6 +1633,9 @@ export function createChatGptWebAdapter(
              throw error;
            }
            const turnError = submittedTurnFailure(session, error);
@@ -10238,10 +10286,10 @@ index 0000000000000000000000000000000000000000..a10a1ae8819cc69571060b8273db60a1
 +});
 diff --git a/tests/turn-resilience.test.ts b/tests/turn-resilience.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..41dcf12b27f6094af204a7e09228a22cd98617aa
+index 0000000000000000000000000000000000000000..fa5bbaa35601c6a681f269f5dc0e169ce1ad08f1
 --- /dev/null
 +++ b/tests/turn-resilience.test.ts
-@@ -0,0 +1,224 @@
+@@ -0,0 +1,263 @@
 +import { expect, test } from "bun:test";
 +import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 +import { join } from "node:path";
@@ -10350,6 +10398,45 @@ index 0000000000000000000000000000000000000000..41dcf12b27f6094af204a7e09228a22c
 +    handle.markRetryableFailure(new Error("retryable"));
 +    const next = new ChatGptWebInFlightJournal(path, 60_000, "boot-two");
 +    expect(() => next.begin(descriptor("completed"))).not.toThrow();
++  } finally {
++    rmSync(root, { recursive: true, force: true });
++  }
++});
++
++test("native aborted-turn evidence retires durable ambiguity without reopening delayed replay", () => {
++  const root = mkdtempSync(join(tmpdir(), "cgw-in-flight-native-abort-test-"));
++  const path = join(root, "browser-in-flight.json");
++  const now = Date.now();
++  try {
++    const journal = new ChatGptWebInFlightJournal(path, 60_000, "boot-one");
++    const aborted = {
++      ...descriptor("aborted"),
++      threadId: "thread-shared",
++      turnId: "turn-aborted",
++    };
++    const active = {
++      ...descriptor("active"),
++      threadId: "thread-shared",
++      turnId: "turn-active",
++    };
++    journal.begin(aborted, now).markAccepted();
++    journal.begin(active, now).markAccepted();
++
++    expect(journal.retireNativeAbortedTurns("thread-shared", new Set(["turn-aborted"]), now + 1)).toBe(1);
++    expect(journal.snapshot(now + 1)).toMatchObject({ blocked_entries: 1, terminal_entries: 1 });
++    const retired = journal.recordsForTesting().find(record => record.turnId === "turn-aborted");
++    expect(retired).toMatchObject({
++      phase: "aborted",
++      terminal: true,
++      uncertain: false,
++      lastError: { code: "native_turn_aborted" },
++    });
++
++    const restarted = new ChatGptWebInFlightJournal(path, 60_000, "boot-two");
++    expect(() => restarted.begin(aborted, now + 2)).toThrow("already marked this ChatGPT Web turn interrupted");
++    expect(() => restarted.begin(active, now + 2)).toThrow("will not replay it automatically");
++
++    expect(restarted.snapshot(now + 60_002)).toMatchObject({ blocked_entries: 1, terminal_entries: 0 });
 +  } finally {
 +    rmSync(root, { recursive: true, force: true });
 +  }
