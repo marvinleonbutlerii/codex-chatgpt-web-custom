@@ -1,16 +1,21 @@
 {
   "upstream": "https://github.com/miuuyy/codex-chatgpt-web",
-  "upstreamVersion": "6.0.0",
-  "baseRef": "v6.0.0",
-  "baseCommit": "212ceef2acac9d6ee0f3c9037abfaf4ad8ff9827",
-  "release": "v6.0.0-custom.1",
+  "upstreamVersion": "6.1.0",
+  "baseRef": "v6.1.0",
+  "baseCommit": "293341084ac7a1ddd2de12fede3706023f5b6474",
+  "release": "v6.1.0-custom.1",
   "distribution": "custom-integrations-source-patch",
-  "patch": "codex-chatgpt-web-custom-v6.0.0.patch",
-  "patchSha256": "30a0d910fb73e344552ee04662674df43a9d56f3707155121d6248065abc84f5",
-  "generatedFromWorktreeHead": "ff9a3f4f83d652ffcc100a782ddb1a86991300d3",
-  "sourceTree": "dbd3570d734d749244a8ac8c4a091aa8d5b687bf",
+  "patch": "codex-chatgpt-web-custom-v6.1.0.patch",
+  "patchSha256": "61218729f1567e7975487554427355ae52b730d9e9f418385de374bada61f23a",
+  "generatedFromWorktreeHead": "36d2cd21e6c2f0f8619cdfbea7c54da2ebc9e3a7",
+  "sourceTree": "e5840f41e6a5856d358e86fb3cdb3f5f959101b4",
   "generatedAt": "2026-09-25",
   "requiredBunVersion": "1.4.2",
+  "patchSummary": {
+    "filesChanged": 87,
+    "insertions": 6204,
+    "deletions": 912
+  },
   "generatedArtifactsExcluded": [
     "launcher/artifacts*",
     "dist"
@@ -23,12 +28,12 @@
     "rootTypecheck": "passed",
     "launcherTypecheck": "passed",
     "rootTests": {
-      "passed": 829,
-      "skipped": 1,
+      "passed": 837,
+      "skipped": 3,
       "failed": 0
     },
     "launcherTests": {
-      "passed": 340,
+      "passed": 351,
       "skipped": 4,
       "failed": 0
     },
