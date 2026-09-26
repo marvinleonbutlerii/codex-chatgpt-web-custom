@@ -39,7 +39,7 @@ jobs:
           mkdir -p "$release_dir/scripts"
           cp README.md RELEASE_NOTES.md LICENSE-upstream.txt manifest.json SHA256SUMS.txt "$release_dir/"
           cp "$patch_name" "$release_dir/"
-          cp scripts/apply.ps1 scripts/verify.ps1 scripts/verify-release.sh "$release_dir/scripts/"
+          cp scripts/apply.ps1 scripts/verify.ps1 "$release_dir/scripts/"
           (cd "$RUNNER_TEMP" && zip -qr "$asset_zip" "$release_name")
           echo "asset_zip=$asset_zip" >> "$GITHUB_OUTPUT"
       - name: Publish GitHub prerelease

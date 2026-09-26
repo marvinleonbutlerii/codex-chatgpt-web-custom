@@ -17,8 +17,7 @@
   ],
   "verificationScripts": [
     "scripts/verify.ps1",
-    "scripts/apply.ps1",
-    "scripts/verify-release.sh"
+    "scripts/apply.ps1"
   ],
   "validation": {
     "rootTypecheck": "passed",
