@@ -6994,7 +6994,7 @@ index a7ba7b40ea092906ce5a9187eaa82e67738fd807..e4f7db0511ff733948dffa7c5e118503
      { streamPlatform: "darwin", stallTimeoutSec, ...(now ? { now } : {}) },
    );
 diff --git a/tests/browser-worker-contract.test.ts b/tests/browser-worker-contract.test.ts
-index 12b8aec676cb5c7b7479e642a65365c3b637090c..1488c6250a060fb84e940069fd357a0258395f7a 100644
+index 12b8aec676cb5c7b7479e642a65365c3b637090c..aaac34f4bf0e1f238923aaf74db38746f41d51e0 100644
 --- a/tests/browser-worker-contract.test.ts
 +++ b/tests/browser-worker-contract.test.ts
 @@ -1,13 +1,15 @@
@@ -7041,7 +7041,7 @@ index 12b8aec676cb5c7b7479e642a65365c3b637090c..1488c6250a060fb84e940069fd357a02
 +    surfaceId: "launcher_surface_id_0123456789AB",
 +    surfaceTargets: { launcher_surface_id_0123456789AB: "native-owned-target" },
 +    createdAt: new Date().toISOString(),
-+  })}\n`);
++  })}\n`, { mode: 0o600 });
 +}
 +
  function personalizedTemporaryChatRole(
